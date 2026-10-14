@@ -259,15 +259,18 @@ export default function HomePage() {
         const expectedExit = new Date(ticket.expected_exit)
         let fineInfoText = ''
 
+        // คำนวณค่าปรับกรณีจอดเกินเวลา
         if (now > expectedExit) {
           const diffMs = now.getTime() - expectedExit.getTime()
           const diffHours = Math.ceil(diffMs / (1000 * 60 * 60))
           const fineRate = rate?.fine_rate || 50
           const totalFine = diffHours * fineRate
 
+          // 🔥 เพิ่ม reported_by_user เพื่อไม่ให้ค่าในฐานข้อมูลเป็น NULL
           await supabase.from('fines').insert([{
             ticket_id: ticket.ticket_id,
-            fine_type_id: 1,
+            fine_type_id: 1, // 1 = จอดรถเกินเวลา
+            reported_by_user: currentUser?.user_id || ticket.user_id, // ใส่ ID ผู้ใช้งานที่ล็อกอินอยู่
             fine_amount: totalFine,
             reported_at: now.toISOString()
           }])
@@ -275,6 +278,7 @@ export default function HomePage() {
           fineInfoText = ` (เกินเวลาจอดไป ${diffHours} ชม. มีค่าปรับ ${totalFine} บาท บันทึกลงตาราง fines เรียบร้อย)`
         }
 
+        // คืนสถานะช่องจอดเป็น AVAILABLE
         const { error } = await supabase
           .from('parking_slots')
           .update({ status: 'AVAILABLE' })
