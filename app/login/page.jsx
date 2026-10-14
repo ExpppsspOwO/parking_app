@@ -35,7 +35,7 @@ export default function AuthPage() {
     setErrorMsg('')
 
     const { data: user, error } = await supabase
-      .from('USERS')
+      .from('users')
       .select('*')
       .eq('username', username)
       .eq('password', password)
@@ -60,7 +60,7 @@ export default function AuthPage() {
 
     // เช็คชื่อผู้ใช้ซ้ำ
     const { data: existingUser } = await supabase
-      .from('USERS')
+      .from('users')
       .select('username')
       .eq('username', username)
       .single()
@@ -72,7 +72,7 @@ export default function AuthPage() {
     }
 
     // บันทึกผู้ใช้ใหม่
-    const { error } = await supabase.from('USERS').insert([
+    const { error } = await supabase.from('users').insert([
       {
         username,
         password,

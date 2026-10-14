@@ -52,12 +52,12 @@ export default function HomePage() {
   }, [hoursToPark, rate])
 
   const fetchSlots = async () => {
-    const { data } = await supabase.from('PARKING_SLOTS').select('*').order('slot_id', { ascending: true })
+    const { data } = await supabase.from('parking_slots').select('*').order('slot_id', { ascending: true })
     if (data) setSlots(data)
   }
 
   const fetchPricingRate = async () => {
-    const { data } = await supabase.from('PRICING_RATES').select('*').limit(1).single()
+    const { data } = await supabase.from('pricing_rates').select('*').limit(1).single()
     if (data) setRate(data)
   }
 
@@ -74,7 +74,7 @@ export default function HomePage() {
     const exitTime = new Date(entryTime.getTime() + hoursToPark * 60 * 60 * 1000)
 
     // บันทึกรายการจอง
-    const { error: txError } = await supabase.from('PARKING_TRANSACTIONS').insert([{
+    const { error: txError } = await supabase.from('parking_transactions').insert([{
       ticket_id: ticketId,
       user_id: currentUser.user_id,
       slot_id: selectedSlot.slot_id,
@@ -92,7 +92,7 @@ export default function HomePage() {
     }
 
     // อัปเดตสถานะช่องจอดเป็น OCCUPIED
-    await supabase.from('PARKING_SLOTS')
+    await supabase.from('parking_slots')
       .update({ status: 'OCCUPIED' })
       .eq('slot_id', selectedSlot.slot_id)
 
@@ -112,8 +112,8 @@ export default function HomePage() {
     if (!query) return
 
     const { data, error } = await supabase
-      .from('PARKING_TRANSACTIONS')
-      .select('*, PARKING_SLOTS(*)')
+      .from('parking_transactions')
+      .select('*, parking_slots(*)')
       .eq('license_plate', query.toUpperCase())
       .order('entry_time', { ascending: false })
       .limit(1)
@@ -130,7 +130,7 @@ export default function HomePage() {
   // Admin CRUD Functions
   const handleAddSlot = async () => {
     if (!newSlotId) return
-    const { error } = await supabase.from('PARKING_SLOTS').insert([{
+    const { error } = await supabase.from('parking_slots').insert([{
       slot_id: newSlotId.toUpperCase(),
       floor_no: newFloorNo,
       zone_code: newZoneCode.toUpperCase(),
@@ -145,13 +145,13 @@ export default function HomePage() {
   }
 
   const handleUpdateSlotStatus = async (slot_id, newStatus) => {
-    await supabase.from('PARKING_SLOTS').update({ status: newStatus }).eq('slot_id', slot_id)
+    await supabase.from('parking_slots').update({ status: newStatus }).eq('slot_id', slot_id)
     fetchSlots()
   }
 
   const handleDeleteSlot = async (slot_id) => {
     if (confirm(`ยืนยันการลบช่องจอด ${slot_id}?`)) {
-      await supabase.from('PARKING_SLOTS').delete().eq('slot_id', slot_id)
+      await supabase.from('parking_slots').delete().eq('slot_id', slot_id)
       fetchSlots()
     }
   }
@@ -192,6 +192,9 @@ export default function HomePage() {
             <div className="flex gap-2">
               <button onClick={() => router.push('/login')} className="px-4 py-2 bg-[#52B762] text-white text-xs font-medium rounded-xl">
                 เข้าสู่ระบบ
+              </button>
+              <button onClick={() => router.push('/login')} className="px-4 py-2 bg-slate-200 text-slate-700 text-xs font-medium rounded-xl">
+                สมัครสมาชิก
               </button>
             </div>
           )}
