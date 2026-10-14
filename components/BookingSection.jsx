@@ -24,9 +24,17 @@ export default function BookingSection({
             อัตราค่าบริการ: ชั่วโมงแรก {rate.first_hour_rate} บาท / ชั่วโมงถัดไป {rate.next_hour_rate} บาท
           </p>
         </div>
-        <span className="text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 px-3 py-1.5 rounded-full">
-          ว่าง {slots.filter(s => s.status === 'AVAILABLE').length} / {slots.length} ช่อง
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 px-3 py-1.5 rounded-full">
+            ว่าง {slots.filter(s => s.status === 'AVAILABLE').length} ช่อง
+          </span>
+          <span className="text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200 px-3 py-1.5 rounded-full">
+            ไม่ว่าง {slots.filter(s => s.status === 'OCCUPIED').length} ช่อง
+          </span>
+          <span className="text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200 px-3 py-1.5 rounded-full">
+            ไม่พร้อมใช้งาน {slots.filter(s => s.status === 'UNAVAILABLE').length} ช่อง
+          </span>
+        </div>
       </div>
 
       {uniqueFloors.length === 0 ? (
@@ -96,24 +104,33 @@ export default function BookingSection({
               <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3">
                 {filteredBookingSlots.map(s => {
                   const isAvail = s.status === 'AVAILABLE'
+                  const isOccupied = s.status === 'OCCUPIED'
                   const isSelected = selectedSlot?.slot_id === s.slot_id
+
+                  let statusText = 'ว่าง'
+                  let buttonStyle = 'bg-white border-slate-200 hover:bg-emerald-50 hover:border-emerald-300 text-slate-700'
+
+                  if (!isAvail) {
+                    if (isOccupied) {
+                      statusText = 'ไม่ว่าง'
+                      buttonStyle = 'bg-amber-50 border-amber-200 text-amber-700 cursor-not-allowed opacity-80'
+                    } else {
+                      statusText = 'ไม่พร้อมใช้งาน'
+                      buttonStyle = 'bg-slate-200 border-slate-300 text-slate-400 cursor-not-allowed opacity-70'
+                    }
+                  } else if (isSelected) {
+                    buttonStyle = 'bg-[#52B762] text-white border-[#52B762] ring-2 ring-emerald-400 shadow-xs'
+                  }
+
                   return (
                     <button
                       key={s.slot_id}
                       disabled={!isAvail}
                       onClick={() => setSelectedSlot(s)}
-                      className={`h-20 rounded-xl border flex flex-col items-center justify-center transition-all ${
-                        !isAvail
-                          ? 'bg-slate-200/80 border-slate-200 text-slate-400 cursor-not-allowed'
-                          : isSelected
-                          ? 'bg-[#52B762] text-white border-[#52B762] ring-2 ring-emerald-400 shadow-xs'
-                          : 'bg-white border-slate-200 hover:bg-emerald-50 hover:border-emerald-300 text-slate-700'
-                      }`}
+                      className={`h-20 rounded-xl border flex flex-col items-center justify-center transition-all ${buttonStyle}`}
                     >
                       <span className="text-sm font-mono font-bold">{s.slot_id}</span>
-                      <span className="text-[10px] mt-1 font-medium">
-                        {s.status === 'AVAILABLE' ? 'ว่าง' : 'ไม่ว่าง'}
-                      </span>
+                      <span className="text-[10px] mt-1 font-medium">{statusText}</span>
                     </button>
                   )
                 })}
