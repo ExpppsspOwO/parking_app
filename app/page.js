@@ -35,6 +35,7 @@ export default function HomePage() {
   // Admin Financial Reports State
   const [paymentsList, setPaymentsList] = useState([])
   const [finesList, setFinesList] = useState([])
+  const [allTransactions, setAllTransactions] = useState([])
 
   // User Management State
   const [usersList, setUsersList] = useState([])
@@ -200,7 +201,7 @@ export default function HomePage() {
     }
   }
 
-  // 📊 ดึงข้อมูลรายงานการเงินสำหรับ Admin (แก้ปัญหา Join ติด Error)
+  // 📊 ดึงข้อมูลรายงานการเงินสำหรับ Admin
   const fetchAdminFinancials = async () => {
     const { data: payData } = await supabase
       .from('payments')
@@ -214,7 +215,7 @@ export default function HomePage() {
 
     const { data: txData } = await supabase
       .from('parking_transactions')
-      .select('ticket_id, license_plate, slot_id, user_id')
+      .select('ticket_id, license_plate, slot_id, user_id, prepaid_amount')
 
     const txMap = {}
     if (txData) {
@@ -222,6 +223,8 @@ export default function HomePage() {
         txMap[tx.ticket_id] = tx
       })
     }
+
+    setAllTransactions(txData || [])
 
     const mappedPayments = (payData || []).map(p => ({
       ...p,
@@ -285,7 +288,6 @@ export default function HomePage() {
     } else {
       showAlert(`อัปเดตข้อมูลผู้ใช้งาน ${editUsername} เรียบร้อยแล้ว!`, 'บันทึกสำเร็จ', 'success')
       
-      // ถ้าแก้ไขบัญชีตัวเองที่กำลังล็อกอินอยู่ ให้ปรับปรุง localStorage
       if (currentUser?.user_id === editingUser.user_id) {
         const updatedUser = { ...currentUser, ...payload }
         setCurrentUser(updatedUser)
@@ -372,12 +374,12 @@ export default function HomePage() {
       return
     }
 
+    // แก้ไข: ตัด status ออกเพื่อให้สอดคล้องกับตาราง payments ใน DB
     await supabase.from('payments').insert([{
       ticket_id: ticketId,
       amount: calculatedPrice,
       payment_method: 'QR_PROMPTPAY',
-      paid_at: new Date().toISOString(),
-      status: 'COMPLETED'
+      paid_at: new Date().toISOString()
     }])
 
     await supabase.from('parking_slots')
@@ -435,12 +437,12 @@ export default function HomePage() {
         reported_at: now.toISOString()
       }])
 
+      // แก้ไข: ตัด status ออกเพื่อให้สอดคล้องกับตาราง payments ใน DB
       await supabase.from('payments').insert([{
         ticket_id: ticket.ticket_id,
         amount: totalFine,
         payment_method: 'QR_PROMPTPAY',
-        paid_at: now.toISOString(),
-        status: 'COMPLETED'
+        paid_at: now.toISOString()
       }])
     }
 
@@ -593,9 +595,10 @@ export default function HomePage() {
     s => s.floor_no === adminManageFloor && s.zone_code === adminManageZone
   )
 
-  const totalRevenue = paymentsList.reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+  // คำนวณสรุปยอดการเงินอย่างถูกต้อง ไม่ติดลบ
+  const totalParkingRevenue = allTransactions.reduce((acc, t) => acc + (Number(t.prepaid_amount) || 0), 0)
   const totalFines = finesList.reduce((acc, f) => acc + (Number(f.fine_amount) || 0), 0)
-  const totalParkingRevenue = totalRevenue - totalFines
+  const totalRevenue = totalParkingRevenue + totalFines
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-start p-4 md:p-8 text-[#0F172A]">
@@ -809,7 +812,7 @@ export default function HomePage() {
               <div className="bg-white p-4 border border-slate-200 rounded-2xl text-center shadow-xs">
                 <span className="text-xs text-slate-400 block mb-1">รายได้รวมทั้งหมด</span>
                 <p className="text-2xl font-bold text-[#52B762]">{totalRevenue.toLocaleString()} ฿</p>
-                <span className="text-[10px] text-slate-400 mt-1 block">จากตาราง payments</span>
+                <span className="text-[10px] text-slate-400 mt-1 block">ยอดบริการจอด + ค่าปรับ</span>
               </div>
 
               <div className="bg-white p-4 border border-slate-200 rounded-2xl text-center shadow-xs">
@@ -1256,7 +1259,7 @@ export default function HomePage() {
         )}
       </main>
 
-      {/* MODAL แก้ไขข้อมูลผู้ใช้งาน (EDIT USER MODAL) */}
+      {/* MODAL แก้ไขข้อมูลผู้ใช้งาน */}
       {editingUser && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <div className="bg-white border border-slate-200 w-full max-w-sm rounded-3xl p-6 shadow-xl transform transition-all duration-300 animate-[popIn_0.22s_ease-out]">
