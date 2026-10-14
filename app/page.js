@@ -15,16 +15,22 @@ export default function HomePage() {
   const [rate, setRate] = useState({ rate_id: 1, first_hour_rate: 20, next_hour_rate: 20, fine_rate: 50 })
   const [selectedSlot, setSelectedSlot] = useState(null)
 
-  // Custom Alert Pop-up Modal State
+  // Custom Alert & Confirm Pop-up Modal State
   const [alertModal, setAlertModal] = useState({
     isOpen: false,
     title: '',
     message: '',
-    type: 'success'
+    type: 'success' // 'success' | 'error' | 'confirm'
   })
+  const [confirmCallback, setConfirmCallback] = useState(null)
 
   const showAlert = (message, title = 'ดำเนินการสำเร็จ', type = 'success') => {
     setAlertModal({ isOpen: true, title, message, type })
+  }
+
+  const showConfirm = (message, title = 'ยืนยันการทำรายการ', onConfirmAction) => {
+    setAlertModal({ isOpen: true, title, message, type: 'confirm' })
+    setConfirmCallback(() => onConfirmAction)
   }
 
   // Booking Floor & Zone Selector States
@@ -40,7 +46,7 @@ export default function HomePage() {
 
   // Ticket Status State
   const [searchPlate, setSearchPlate] = useState('')
-  const [activeTicket, setActiveTicket] = useState(null)
+  const [userTickets, setUserTickets] = useState([])
   const [remainingTimeText, setRemainingTimeText] = useState('')
 
   // Admin Floor & Zone Selector States
@@ -73,9 +79,8 @@ export default function HomePage() {
     fetchPricingRate()
   }, [])
 
-  // รายชื่อชั้นและโซนทั้งหมด
   const uniqueFloors = Array.from(new Set(slots.map(s => s.floor_no))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-
+  
   const bookingAvailableZones = Array.from(
     new Set(slots.filter(s => s.floor_no === bookingFloor).map(s => s.zone_code))
   ).sort()
@@ -86,20 +91,14 @@ export default function HomePage() {
 
   useEffect(() => {
     if (uniqueFloors.length > 0) {
-      if (!bookingFloor || !uniqueFloors.includes(bookingFloor)) {
-        setBookingFloor(uniqueFloors[0])
-      }
-      if (!adminManageFloor || !uniqueFloors.includes(adminManageFloor)) {
-        setAdminManageFloor(uniqueFloors[0])
-      }
+      if (!bookingFloor || !uniqueFloors.includes(bookingFloor)) setBookingFloor(uniqueFloors[0])
+      if (!adminManageFloor || !uniqueFloors.includes(adminManageFloor)) setAdminManageFloor(uniqueFloors[0])
     }
   }, [uniqueFloors])
 
   useEffect(() => {
     if (bookingAvailableZones.length > 0) {
-      if (!bookingZone || !bookingAvailableZones.includes(bookingZone)) {
-        setBookingZone(bookingAvailableZones[0])
-      }
+      if (!bookingZone || !bookingAvailableZones.includes(bookingZone)) setBookingZone(bookingAvailableZones[0])
     } else {
       setBookingZone('')
     }
@@ -107,9 +106,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (adminAvailableZones.length > 0) {
-      if (!adminManageZone || !adminAvailableZones.includes(adminManageZone)) {
-        setAdminManageZone(adminAvailableZones[0])
-      }
+      if (!adminManageZone || !adminAvailableZones.includes(adminManageZone)) setAdminManageZone(adminAvailableZones[0])
     } else {
       setAdminManageZone('')
     }
@@ -124,27 +121,6 @@ export default function HomePage() {
       setCalculatedPrice(total)
     }
   }, [hoursToPark, rate])
-
-  useEffect(() => {
-    if (!activeTicket || !activeTicket.expected_exit) return
-
-    const timer = setInterval(() => {
-      const now = new Date().getTime()
-      const exit = new Date(activeTicket.expected_exit).getTime()
-      const diff = exit - now
-
-      if (diff <= 0) {
-        setRemainingTimeText('หมดเวลาจอดแล้ว (เกินเวลาจอด)')
-      } else {
-        const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
-        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
-        const seconds = Math.floor((diff % (1000 * 60)) / 1000)
-        setRemainingTimeText(`${hours} ชั่วโมง ${minutes} นาที ${seconds} วินาที`)
-      }
-    }, 1000)
-
-    return () => clearInterval(timer)
-  }, [activeTicket])
 
   const fetchSlots = async () => {
     const { data, error } = await supabase.from('parking_slots').select('*')
@@ -189,6 +165,7 @@ export default function HomePage() {
     setIsUpdatingRate(false)
   }
 
+  // ยืนยันการจอง (แก้เรื่อง status column ไม่พบ)
   const handleBookingConfirm = async () => {
     if (!currentUser) {
       showAlert('กรุณาเข้าสู่ระบบก่อนทำการจอง', 'แจ้งเตือน', 'error')
@@ -201,7 +178,7 @@ export default function HomePage() {
     const entryTime = new Date()
     const exitTime = new Date(entryTime.getTime() + hoursToPark * 60 * 60 * 1000)
 
-    // 1. บันทึกข้อมูลตั๋วลง parking_transactions
+    // 1. บันทึกลง parking_transactions (ตัด status ออกเนื่องจากไม่มีใน Schema)
     const { error: txError } = await supabase.from('parking_transactions').insert([{
       ticket_id: ticketId,
       user_id: currentUser.user_id,
@@ -211,8 +188,7 @@ export default function HomePage() {
       entry_time: entryTime.toISOString(),
       expected_exit: exitTime.toISOString(),
       prepaid_amount: calculatedPrice,
-      grand_total: calculatedPrice,
-      status: 'ACTIVE'
+      grand_total: calculatedPrice
     }])
 
     if (txError) {
@@ -220,8 +196,8 @@ export default function HomePage() {
       return
     }
 
-    // 2. บันทึกประวัติการชำระเงินลงตาราง payments ตาม ER Diagram
-    const { error: payError } = await supabase.from('payments').insert([{
+    // 2. บันทึกลง payments ตาม ER Diagram
+    await supabase.from('payments').insert([{
       ticket_id: ticketId,
       amount: calculatedPrice,
       payment_method: 'QR_PROMPTPAY',
@@ -229,11 +205,7 @@ export default function HomePage() {
       status: 'COMPLETED'
     }])
 
-    if (payError) {
-      console.error('Error inserting payment record:', payError)
-    }
-
-    // 3. ปรับสถานะช่องจอดเป็น OCCUPIED (ไม่ให้คนอื่นจองซ้ำ)
+    // 3. ปรับสถานะช่องจอด
     await supabase.from('parking_slots')
       .update({ status: 'OCCUPIED' })
       .eq('slot_id', selectedSlot.slot_id)
@@ -242,23 +214,19 @@ export default function HomePage() {
     setIsBookingModalOpen(false)
     fetchSlots()
 
-    // แสดงตั๋วทั้งหมดของผู้ใช้ทันที
     handleSearchTicket(licensePlate.toUpperCase())
     setActiveTab('status')
-
+    
     setSelectedSlot(null)
     setLicensePlate('')
   }
 
-  const [userTickets, setUserTickets] = useState([])
-
-  // ดึงตั๋วทั้งหมดของผู้ใช้ หรือดึงตามป้ายทะเบียน (ไม่จำกัดแค่ 1 ใบ)
   const handleSearchTicket = async (plateToSearch) => {
     const query = plateToSearch || searchPlate
 
     let dbQuery = supabase
       .from('parking_transactions')
-      .select('*, parking_slots(*), payments(*)')
+      .select('*, parking_slots(*)')
       .order('entry_time', { ascending: false })
 
     if (query) {
@@ -314,7 +282,6 @@ export default function HomePage() {
     }
   }
 
-  // สลับสถานะช่องจอดเดี่ยว (วนตามลำดับ AVAILABLE -> OCCUPIED -> UNAVAILABLE -> AVAILABLE)
   const handleToggleSlotStatus = async (slotId, currentStatus) => {
     let nextStatus = 'AVAILABLE'
     if (currentStatus === 'AVAILABLE') nextStatus = 'OCCUPIED'
@@ -325,14 +292,18 @@ export default function HomePage() {
     fetchSlots()
   }
 
-  // ลบช่องจอดเดี่ยว
-  const handleDeleteSlot = async (slotId) => {
-    if (confirm(`คุณต้องการลบช่องจอด ${slotId} ออกจากระบบใช่หรือไม่?`)) {
-      await supabase.from('parking_slots').delete().eq('slot_id', slotId)
-      setSelectedSlotIds(prev => prev.filter(id => id !== slotId))
-      showAlert(`ลบช่องจอด ${slotId} สำเร็จแล้ว`, 'ลบสำเร็จ', 'success')
-      fetchSlots()
-    }
+  // ลบช่องจอดเดี่ยว (ใช้ Custom Confirm Modal)
+  const handleDeleteSlot = (slotId) => {
+    showConfirm(
+      `คุณต้องการลบช่องจอด ${slotId} ออกจากระบบใช่หรือไม่?`,
+      'ยืนยันการลบช่องจอด',
+      async () => {
+        await supabase.from('parking_slots').delete().eq('slot_id', slotId)
+        setSelectedSlotIds(prev => prev.filter(id => id !== slotId))
+        showAlert(`ลบช่องจอด ${slotId} สำเร็จแล้ว`, 'ลบสำเร็จ', 'success')
+        fetchSlots()
+      }
+    )
   }
 
   const handleToggleSelectSlot = (slotId) => {
@@ -350,47 +321,56 @@ export default function HomePage() {
     }
   }
 
-  // 🔥 ฟังก์ชันอัปเดตสถานะแบบชุด (Batch Update Status)
-  const handleBulkUpdateStatus = async (newStatus) => {
+  // เปลี่ยนสถานะหลายช่องจอด (ใช้ Custom Confirm Modal)
+  const handleBulkUpdateStatus = (newStatus) => {
     if (selectedSlotIds.length === 0) return
 
-    const statusLabel =
-      newStatus === 'AVAILABLE' ? 'ว่าง' :
-        newStatus === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
+    const statusLabel = 
+      newStatus === 'AVAILABLE' ? 'ว่าง' : 
+      newStatus === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
 
-    if (confirm(`คุณต้องการเปลี่ยนสถานะช่องจอดที่เลือกจำนวน ${selectedSlotIds.length} รายการ เป็น "${statusLabel}" ใช่หรือไม่?`)) {
-      const { error } = await supabase
-        .from('parking_slots')
-        .update({ status: newStatus })
-        .in('slot_id', selectedSlotIds)
+    showConfirm(
+      `คุณต้องการเปลี่ยนสถานะช่องจอดที่เลือกจำนวน ${selectedSlotIds.length} รายการ เป็น "${statusLabel}" ใช่หรือไม่?`,
+      'ยืนยันการเปลี่ยนสถานะ',
+      async () => {
+        const { error } = await supabase
+          .from('parking_slots')
+          .update({ status: newStatus })
+          .in('slot_id', selectedSlotIds)
 
-      if (error) {
-        showAlert('เกิดข้อผิดพลาดในการเปลี่ยนสถานะ: ' + error.message, 'เกิดข้อผิดพลาด', 'error')
-      } else {
-        showAlert(`เปลี่ยนสถานะช่องจอด ${selectedSlotIds.length} รายการเป็น "${statusLabel}" สำเร็จ!`, 'เปลี่ยนสถานะสำเร็จ', 'success')
-        setSelectedSlotIds([])
-        fetchSlots()
+        if (error) {
+          showAlert('เกิดข้อผิดพลาดในการเปลี่ยนสถานะ: ' + error.message, 'เกิดข้อผิดพลาด', 'error')
+        } else {
+          showAlert(`เปลี่ยนสถานะช่องจอด ${selectedSlotIds.length} รายการเป็น "${statusLabel}" สำเร็จ!`, 'เปลี่ยนสถานะสำเร็จ', 'success')
+          setSelectedSlotIds([])
+          fetchSlots()
+        }
       }
-    }
+    )
   }
 
-  // ลบช่องจอดที่เลือกแบบกลุ่ม (Bulk Delete)
-  const handleBulkDeleteSlots = async () => {
+  // ลบหลายช่องจอด (ใช้ Custom Confirm Modal)
+  const handleBulkDeleteSlots = () => {
     if (selectedSlotIds.length === 0) return
-    if (confirm(`ยืนยันการลบช่องจอดที่เลือกจำนวน ${selectedSlotIds.length} รายการใช่หรือไม่?`)) {
-      const { error } = await supabase
-        .from('parking_slots')
-        .delete()
-        .in('slot_id', selectedSlotIds)
 
-      if (error) {
-        showAlert('เกิดข้อผิดพลาดในการลบ: ' + error.message, 'เกิดข้อผิดพลาด', 'error')
-      } else {
-        showAlert(`ลบช่องจอดสำเร็จแล้ว ${selectedSlotIds.length} รายการ!`, 'ลบสำเร็จ', 'success')
-        setSelectedSlotIds([])
-        fetchSlots()
+    showConfirm(
+      `ยืนยันการลบช่องจอดที่เลือกจำนวน ${selectedSlotIds.length} รายการใช่หรือไม่?`,
+      'ยืนยันการลบช่องจอดหลายรายการ',
+      async () => {
+        const { error } = await supabase
+          .from('parking_slots')
+          .delete()
+          .in('slot_id', selectedSlotIds)
+
+        if (error) {
+          showAlert('เกิดข้อผิดพลาดในการลบ: ' + error.message, 'เกิดข้อผิดพลาด', 'error')
+        } else {
+          showAlert(`ลบช่องจอดสำเร็จแล้ว ${selectedSlotIds.length} รายการ!`, 'ลบสำเร็จ', 'success')
+          setSelectedSlotIds([])
+          fetchSlots()
+        }
       }
-    }
+    )
   }
 
   const handleLogout = () => {
@@ -445,23 +425,26 @@ export default function HomePage() {
       <div className="w-full max-w-6xl flex gap-2 mb-6">
         <button
           onClick={() => setActiveTab('booking')}
-          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${activeTab === 'booking' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
-            }`}
+          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${
+            activeTab === 'booking' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
+          }`}
         >
           <i className="fa-solid fa-car mr-2"></i> เลือกช่องจอดรถ (Real-time)
         </button>
         <button
           onClick={() => setActiveTab('status')}
-          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${activeTab === 'status' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
-            }`}
+          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${
+            activeTab === 'status' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
+          }`}
         >
           <i className="fa-solid fa-clock mr-2"></i> ตรวจสอบสถานะการจอง
         </button>
         {currentUser?.role === 'ADMIN' && (
           <button
             onClick={() => setActiveTab('admin')}
-            className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${activeTab === 'admin' ? 'bg-slate-800 text-white border-slate-800 shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
-              }`}
+            className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${
+              activeTab === 'admin' ? 'bg-slate-800 text-white border-slate-800 shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
+            }`}
           >
             <i className="fa-solid fa-sliders mr-2"></i> แผงควบคุม Admin
           </button>
@@ -489,9 +472,9 @@ export default function HomePage() {
 
         {/* ==================== TAB 2: ตรวจสอบสถานะการจอง ==================== */}
         {activeTab === 'status' && (
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs max-w-xl mx-auto">
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs max-w-2xl mx-auto">
             <h2 className="text-base font-bold text-slate-800 mb-1">ตรวจสอบสถานะการจองที่จอดรถ</h2>
-            <p className="text-xs text-slate-400 mb-4">กรอกเลขป้ายทะเบียนรถเพื่อเรียกดูเวลาคงเหลือและตำแหน่งจอด</p>
+            <p className="text-xs text-slate-400 mb-4">กรอกป้ายทะเบียนรถเพื่อเรียกดูตั๋วการจองทั้งหมดของคุณ</p>
 
             <div className="flex gap-2 mb-6">
               <input
@@ -506,70 +489,50 @@ export default function HomePage() {
               </button>
             </div>
 
-            {activeTab === 'status' && (
-              <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs max-w-2xl mx-auto">
-                <h2 className="text-base font-bold text-slate-800 mb-1">ตรวจสอบสถานะการจองที่จอดรถ</h2>
-                <p className="text-xs text-slate-400 mb-4">กรอกป้ายทะเบียนรถเพื่อค้นหาตั๋วการจองทั้งหมดของคุณ</p>
-
-                <div className="flex gap-2 mb-6">
-                  <input
-                    type="text"
-                    value={searchPlate}
-                    onChange={(e) => setSearchPlate(e.target.value)}
-                    placeholder="เช่น 1กข 1234"
-                    className="flex-1 bg-slate-50 border border-slate-200 h-11 rounded-xl px-4 text-xs font-medium uppercase focus:outline-none focus:border-[#52B762]"
-                  />
-                  <button onClick={() => handleSearchTicket()} className="px-6 bg-[#52B762] hover:bg-[#439E51] text-white text-xs font-semibold rounded-xl transition-all shadow-xs">
-                    ค้นหา
-                  </button>
-                </div>
-
-                {userTickets.length > 0 ? (
-                  <div className="space-y-4">
-                    <span className="text-xs font-bold text-slate-600 block">
-                      พบรายการจองทั้งหมด {userTickets.length} รายการ:
-                    </span>
-
-                    {userTickets.map((ticket) => (
-                      <div key={ticket.ticket_id} className="bg-slate-50 border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
-                        <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-                          <div>
-                            <span className="text-[10px] text-slate-400 block">ตั๋วเลขที่: {ticket.ticket_id}</span>
-                            <h3 className="text-lg font-bold text-slate-800">{ticket.license_plate}</h3>
-                          </div>
-                          <span className="text-xs font-semibold bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full border border-emerald-200">
-                            ✓ {ticket.status || 'ACTIVE'}
-                          </span>
-                        </div>
-
-                        <div className="bg-white p-4 rounded-xl border border-slate-200 text-xs space-y-2 text-slate-700">
-                          <div className="flex justify-between border-b pb-2">
-                            <span className="text-slate-400">ตำแหน่งช่องจอด:</span>
-                            <span className="font-bold text-[#52B762]">
-                              ชั้น {ticket.parking_slots?.floor_no || '-'} • โซน {ticket.parking_slots?.zone_code || '-'} (ช่อง {ticket.slot_id})
-                            </span>
-                          </div>
-                          <div className="flex justify-between border-b pb-2">
-                            <span className="text-slate-400">เวลาเริ่มจอด:</span>
-                            <span className="font-medium">{new Date(ticket.entry_time).toLocaleString('th-TH')}</span>
-                          </div>
-                          <div className="flex justify-between border-b pb-2">
-                            <span className="text-slate-400">เวลาสิ้นสุด:</span>
-                            <span className="font-medium">{new Date(ticket.expected_exit).toLocaleString('th-TH')}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-slate-400">ยอดชำระแล้ว (ผ่าน QR):</span>
-                            <span className="font-bold text-slate-900">{ticket.prepaid_amount} บาท</span>
-                          </div>
-                        </div>
+            {userTickets.length > 0 ? (
+              <div className="space-y-4">
+                <span className="text-xs font-bold text-slate-600 block">
+                  พบรายการจองทั้งหมด {userTickets.length} รายการ:
+                </span>
+                
+                {userTickets.map((ticket) => (
+                  <div key={ticket.ticket_id} className="bg-slate-50 border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
+                    <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+                      <div>
+                        <span className="text-[10px] text-slate-400 block">ตั๋วเลขที่: {ticket.ticket_id}</span>
+                        <h3 className="text-lg font-bold text-slate-800">{ticket.license_plate}</h3>
                       </div>
-                    ))}
+                      <span className="text-xs font-semibold bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full border border-emerald-200">
+                        ✓ จองสำเร็จ
+                      </span>
+                    </div>
+
+                    <div className="bg-white p-4 rounded-xl border border-slate-200 text-xs space-y-2 text-slate-700">
+                      <div className="flex justify-between border-b pb-2">
+                        <span className="text-slate-400">ตำแหน่งช่องจอด:</span>
+                        <span className="font-bold text-[#52B762]">
+                          ชั้น {ticket.parking_slots?.floor_no || '-'} • โซน {ticket.parking_slots?.zone_code || '-'} (ช่อง {ticket.slot_id})
+                        </span>
+                      </div>
+                      <div className="flex justify-between border-b pb-2">
+                        <span className="text-slate-400">เวลาเริ่มจอด:</span>
+                        <span className="font-medium">{new Date(ticket.entry_time).toLocaleString('th-TH')}</span>
+                      </div>
+                      <div className="flex justify-between border-b pb-2">
+                        <span className="text-slate-400">เวลาสิ้นสุด:</span>
+                        <span className="font-medium">{new Date(ticket.expected_exit).toLocaleString('th-TH')}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">ยอดชำระแล้ว:</span>
+                        <span className="font-bold text-slate-900">{ticket.prepaid_amount} บาท</span>
+                      </div>
+                    </div>
                   </div>
-                ) : (
-                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-400">
-                    กรอกป้ายทะเบียนด้านบนเพื่อค้นหารายการตั๋วการจองทั้งหมด
-                  </div>
-                )}
+                ))}
+              </div>
+            ) : (
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-400">
+                กรอกป้ายทะเบียนด้านบนเพื่อเช็คสถานะการจอง
               </div>
             )}
           </div>
@@ -699,7 +662,7 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* หน้ารายการช่องจอดทั้งหมด Admin พร้อมระบบ Batch Update และ Delete */}
+            {/* หน้ารายการช่องจอดทั้งหมด Admin */}
             <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
               <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3 mb-6 pb-4 border-b border-slate-200">
                 <div>
@@ -707,13 +670,13 @@ export default function HomePage() {
                   <p className="text-xs text-slate-400">เลือกช่องจอดเพื่อเปลี่ยนสถานะ หรือลบออกพร้อมกันทีเดียวหลายช่องได้</p>
                 </div>
 
-                {/* 🔥 แถบปุ่มจัดการพร้อมกันทีเดียว (Bulk Action Controls) */}
+                {/* แถบปุ่มจัดการพร้อมกันทีเดียว */}
                 {selectedSlotIds.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 animate-fadeIn">
+                  <div className="flex flex-wrap items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
                     <span className="text-[11px] font-bold text-slate-700 px-2">
                       เลือกอยู่ {selectedSlotIds.length} รายการ:
                     </span>
-
+                    
                     <button
                       onClick={() => handleBulkUpdateStatus('AVAILABLE')}
                       className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold rounded-lg transition-all shadow-2xs flex items-center gap-1"
@@ -749,7 +712,6 @@ export default function HomePage() {
                 <div className="text-center py-8 text-xs text-slate-400">ยังไม่มีข้อมูลช่องจอดในระบบ</div>
               ) : (
                 <div className="space-y-6">
-                  {/* 1. ปุ่มเลือกชั้น (Admin) */}
                   <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
                     <span className="text-xs font-bold text-slate-700 block mb-2.5">
                       <i className="fa-solid fa-layer-group text-[#52B762] mr-1.5"></i> 1. เลือกชั้นที่ต้องการจัดการ:
@@ -759,10 +721,11 @@ export default function HomePage() {
                         <button
                           key={floor}
                           onClick={() => setAdminManageFloor(floor)}
-                          className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${adminManageFloor === floor
+                          className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                            adminManageFloor === floor
                               ? 'bg-[#52B762] text-white shadow-xs'
                               : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                            }`}
+                          }`}
                         >
                           ชั้น {floor}
                         </button>
@@ -770,7 +733,6 @@ export default function HomePage() {
                     </div>
                   </div>
 
-                  {/* 2. ปุ่มเลือกโซน (Admin) */}
                   {adminAvailableZones.length > 0 && (
                     <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
                       <span className="text-xs font-bold text-slate-700 block mb-2.5">
@@ -781,10 +743,11 @@ export default function HomePage() {
                           <button
                             key={zone}
                             onClick={() => setAdminManageZone(zone)}
-                            className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${adminManageZone === zone
+                            className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${
+                              adminManageZone === zone
                                 ? 'bg-slate-800 text-white shadow-xs'
                                 : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                              }`}
+                            }`}
                           >
                             โซน {zone} (Zone {zone})
                           </button>
@@ -793,7 +756,6 @@ export default function HomePage() {
                     </div>
                   )}
 
-                  {/* 3. ตารางจัดการช่องจอดตาม ชั้น + โซน */}
                   <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200">
                     <div className="flex justify-between items-center mb-4 pb-2 border-b border-slate-200">
                       <span className="text-xs font-bold text-slate-700">
@@ -822,22 +784,23 @@ export default function HomePage() {
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                         {filteredAdminSlots.map(s => {
                           const isChecked = selectedSlotIds.includes(s.slot_id)
-                          const statusBg =
+                          const statusBg = 
                             s.status === 'AVAILABLE' ? 'text-emerald-600 bg-emerald-50 border-emerald-200' :
-                              s.status === 'OCCUPIED' ? 'text-amber-600 bg-amber-50 border-amber-200' :
-                                'text-slate-500 bg-slate-100 border-slate-300'
+                            s.status === 'OCCUPIED' ? 'text-amber-600 bg-amber-50 border-amber-200' :
+                            'text-slate-500 bg-slate-100 border-slate-300'
 
-                          const statusText =
+                          const statusText = 
                             s.status === 'AVAILABLE' ? 'ว่าง' :
-                              s.status === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
+                            s.status === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
 
                           return (
                             <div
                               key={s.slot_id}
-                              className={`p-3 rounded-xl border flex items-center justify-between transition-all ${isChecked
+                              className={`p-3 rounded-xl border flex items-center justify-between transition-all ${
+                                isChecked
                                   ? 'bg-rose-50/70 border-rose-300 ring-1 ring-rose-200'
                                   : 'bg-white border-slate-200 hover:border-slate-300 shadow-2xs'
-                                }`}
+                              }`}
                             >
                               <div className="flex items-center gap-2.5">
                                 <input
@@ -857,7 +820,7 @@ export default function HomePage() {
                               <div className="flex items-center gap-1">
                                 <button
                                   onClick={() => handleToggleSlotStatus(s.slot_id, s.status)}
-                                  title="กดเพื่อสลับสถานะ (ว่าง -> ไม่ว่าง -> ไม่พร้อมใช้งาน)"
+                                  title="กดเพื่อสลับสถานะ"
                                   className="px-2 py-1 bg-slate-100 border border-slate-200 hover:bg-slate-200 rounded-lg text-[10px] font-medium text-slate-600"
                                 >
                                   สลับ
@@ -886,7 +849,14 @@ export default function HomePage() {
       {/* MODAL ยืนยันการจอง */}
       {isBookingModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 w-full max-w-sm rounded-3xl p-6 shadow-xl">
+          <div className="bg-white border border-slate-200 w-full max-w-sm rounded-3xl p-6 shadow-xl transform transition-all duration-300 animate-[popIn_0.22s_ease-out]">
+            <style jsx>{`
+              @keyframes popIn {
+                0% { opacity: 0; transform: scale(0.82); }
+                100% { opacity: 1; transform: scale(1); }
+              }
+            `}</style>
+
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-sm font-bold text-slate-800">
                 ยืนยันการจองช่อง {selectedSlot?.slot_id} (ชั้น {selectedSlot?.floor_no} โซน {selectedSlot?.zone_code})
@@ -940,13 +910,13 @@ export default function HomePage() {
             <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center mb-5">
               <span className="text-[11px] font-semibold text-slate-600 block mb-2">สแกน QR Code เพื่อชำระเงิน</span>
               <div className="w-36 h-36 bg-white border border-slate-200 rounded-xl mx-auto flex items-center justify-center overflow-hidden p-2 shadow-2xs">
-                <img
-                  src="/qr-payment.png"
-                  alt="QR Code สำหรับชำระเงิน"
+                <img 
+                  src="/3Gdbm1.png" 
+                  alt="QR Code สำหรับชำระเงิน" 
                   className="w-full h-full object-contain"
                   onError={(e) => {
                     e.target.onerror = null;
-                    e.target.src = '/3Gdbm1.png';
+                    e.target.src = 'https://via.placeholder.com/150?text=Place+QR+Here';
                   }}
                 />
               </div>
@@ -963,10 +933,11 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* POP-UP MODAL แจ้งเตือนพร้อมไอคอนติ๊กถูก */}
+      {/* POP-UP MODAL แจ้งเตือน + Confirm พร้อม Animation */}
       <AlertModal
         alertModal={alertModal}
         onClose={() => setAlertModal({ ...alertModal, isOpen: false })}
+        onConfirm={confirmCallback}
       />
     </div>
   )
