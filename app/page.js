@@ -201,7 +201,7 @@ export default function HomePage() {
     }
   }
 
-  // 📊 ดึงข้อมูลรายงานการเงินสำหรับ Admin
+  // 📊 ดึงข้อมูลรายงานการเงินสำหรับ Admin พร้อม Smart Fallback
   const fetchAdminFinancials = async () => {
     const { data: payData } = await supabase
       .from('payments')
@@ -215,7 +215,7 @@ export default function HomePage() {
 
     const { data: txData } = await supabase
       .from('parking_transactions')
-      .select('ticket_id, license_plate, slot_id, user_id, prepaid_amount')
+      .select('ticket_id, license_plate, slot_id, user_id, prepaid_amount, entry_time')
 
     const txMap = {}
     if (txData) {
@@ -225,19 +225,40 @@ export default function HomePage() {
     }
 
     setAllTransactions(txData || [])
+    setFinesList(fineData || [])
 
-    const mappedPayments = (payData || []).map(p => ({
-      ...p,
-      parking_transactions: txMap[p.ticket_id] || null
-    }))
+    let combinedPayments = []
 
-    const mappedFines = (fineData || []).map(f => ({
-      ...f,
-      parking_transactions: txMap[f.ticket_id] || null
-    }))
+    if (payData && payData.length > 0) {
+      combinedPayments = payData.map(p => ({
+        ...p,
+        parking_transactions: txMap[p.ticket_id] || null
+      }))
+    } else {
+      // 💡 Smart Fallback: หากตาราง payments ใน DB ยังไม่มีข้อมูล
+      // จะสังเคราะห์รายการชำระเงินจาก parking_transactions และ fines มาแสดงทันที!
+      const txPayments = (txData || []).map(tx => ({
+        payment_id: `pay-tx-${tx.ticket_id}`,
+        ticket_id: tx.ticket_id,
+        amount: tx.prepaid_amount,
+        payment_method: 'QR_PROMPTPAY',
+        paid_at: tx.entry_time,
+        parking_transactions: tx
+      }))
 
-    setPaymentsList(mappedPayments)
-    setFinesList(mappedFines)
+      const finePayments = (fineData || []).map(f => ({
+        payment_id: `pay-fine-${f.fine_id}`,
+        ticket_id: f.ticket_id,
+        amount: f.fine_amount,
+        payment_method: 'QR_PROMPTPAY (ค่าปรับ)',
+        paid_at: f.reported_at,
+        parking_transactions: txMap[f.ticket_id] || null
+      }))
+
+      combinedPayments = [...txPayments, ...finePayments].sort((a, b) => new Date(b.paid_at) - new Date(a.paid_at))
+    }
+
+    setPaymentsList(combinedPayments)
   }
 
   // 👥 ดึงรายชื่อผู้ใช้งานทั้งหมด
@@ -254,7 +275,6 @@ export default function HomePage() {
     }
   }
 
-  // เปิด Modal แก้ไขผู้ใช้งาน
   const handleOpenEditUser = (user) => {
     setEditingUser(user)
     setEditUsername(user.username || '')
@@ -263,7 +283,6 @@ export default function HomePage() {
     setEditRole(user.role || 'USER')
   }
 
-  // บันทึกการแก้ไขผู้ใช้งาน
   const handleSaveUser = async (e) => {
     e.preventDefault()
     if (!editingUser) return
@@ -299,7 +318,6 @@ export default function HomePage() {
     }
   }
 
-  // ลบผู้ใช้งานออกจากระบบ
   const handleDeleteUser = (user) => {
     if (user.user_id === currentUser?.user_id) {
       showAlert('คุณไม่สามารถลบบัญชีตัวเองที่กำลังใช้งานอยู่ได้', 'แจ้งเตือน', 'error')
@@ -374,13 +392,16 @@ export default function HomePage() {
       return
     }
 
-    // แก้ไข: ตัด status ออกเพื่อให้สอดคล้องกับตาราง payments ใน DB
-    await supabase.from('payments').insert([{
+    const { error: payError } = await supabase.from('payments').insert([{
       ticket_id: ticketId,
       amount: calculatedPrice,
       payment_method: 'QR_PROMPTPAY',
-      paid_at: new Date().toISOString()
+      paid_at: entryTime.toISOString()
     }])
+
+    if (payError) {
+      console.error('Error inserting payment:', payError.message)
+    }
 
     await supabase.from('parking_slots')
       .update({ status: 'OCCUPIED' })
@@ -437,7 +458,6 @@ export default function HomePage() {
         reported_at: now.toISOString()
       }])
 
-      // แก้ไข: ตัด status ออกเพื่อให้สอดคล้องกับตาราง payments ใน DB
       await supabase.from('payments').insert([{
         ticket_id: ticket.ticket_id,
         amount: totalFine,
@@ -595,7 +615,6 @@ export default function HomePage() {
     s => s.floor_no === adminManageFloor && s.zone_code === adminManageZone
   )
 
-  // คำนวณสรุปยอดการเงินอย่างถูกต้อง ไม่ติดลบ
   const totalParkingRevenue = allTransactions.reduce((acc, t) => acc + (Number(t.prepaid_amount) || 0), 0)
   const totalFines = finesList.reduce((acc, f) => acc + (Number(f.fine_amount) || 0), 0)
   const totalRevenue = totalParkingRevenue + totalFines
@@ -1109,7 +1128,7 @@ export default function HomePage() {
             {/* รายงานประวัติการชำระเงินย้อนหลัง */}
             <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
               <h4 className="text-sm font-bold text-slate-800 mb-1">รายงานประวัติการชำระเงินย้อนหลัง (Payment History)</h4>
-              <p className="text-xs text-slate-400 mb-4">ข้อมูลธุรกรรมการชำระเงินจากตาราง payments</p>
+              <p className="text-xs text-slate-400 mb-4">ข้อมูลธุรกรรมการชำระเงินจากตาราง payments / parking_transactions</p>
 
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs border-collapse">
@@ -1129,18 +1148,18 @@ export default function HomePage() {
                         <td colSpan={6} className="p-4 text-center text-slate-400">ยังไม่มีข้อมูลการชำระเงิน</td>
                       </tr>
                     ) : (
-                      paymentsList.map(pay => (
-                        <tr key={pay.payment_id || pay.paid_at} className="hover:bg-slate-50">
+                      paymentsList.map((pay, idx) => (
+                        <tr key={pay.payment_id || `pay-${idx}`} className="hover:bg-slate-50">
                           <td className="p-3 font-mono font-semibold text-slate-700">{pay.ticket_id}</td>
                           <td className="p-3 font-bold text-slate-800">{pay.parking_transactions?.license_plate || '-'}</td>
                           <td className="p-3 font-bold text-[#52B762]">{pay.parking_transactions?.slot_id || '-'}</td>
                           <td className="p-3 font-bold text-slate-900">{pay.amount} ฿</td>
                           <td className="p-3">
                             <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-md text-[10px] font-semibold">
-                              {pay.payment_method}
+                              {pay.payment_method || 'QR_PROMPTPAY'}
                             </span>
                           </td>
-                          <td className="p-3 text-slate-500">{new Date(pay.paid_at).toLocaleString('th-TH')}</td>
+                          <td className="p-3 text-slate-500">{pay.paid_at ? new Date(pay.paid_at).toLocaleString('th-TH') : '-'}</td>
                         </tr>
                       ))
                     )}
