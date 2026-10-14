@@ -80,7 +80,7 @@ export default function HomePage() {
   }, [])
 
   const uniqueFloors = Array.from(new Set(slots.map(s => s.floor_no))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-  
+
   const bookingAvailableZones = Array.from(
     new Set(slots.filter(s => s.floor_no === bookingFloor).map(s => s.zone_code))
   ).sort()
@@ -133,36 +133,72 @@ export default function HomePage() {
     if (error) console.error('Error fetching slots:', error)
   }
 
+  // 1. ดึงเรทราคา และ ค่าปรับจาก fine_types
   const fetchPricingRate = async () => {
-    const { data } = await supabase.from('pricing_rates').select('*').limit(1).single()
-    if (data) {
-      setRate(data)
-      setInputFirstRate(data.first_hour_rate || 20)
-      setInputNextRate(data.next_hour_rate || 20)
-      setInputFineRate(data.fine_rate || 50)
+    // ดึงเรทค่าบริการจอดปกติ
+    const { data: rateData } = await supabase.from('pricing_rates').select('*').limit(1).maybeSingle()
+    if (rateData) {
+      setRate(rateData)
+      setInputFirstRate(rateData.first_hour_rate ?? 20)
+      setInputNextRate(rateData.next_hour_rate ?? 20)
+    }
+
+    // ดึงค่าปรับจากตาราง fine_types ( ID = 1 : จอดเกินเวลา )
+    const { data: fineData } = await supabase
+      .from('fine_types')
+      .select('*')
+      .eq('fine_type_id', 1)
+      .maybeSingle()
+
+    if (fineData) {
+      setInputFineRate(fineData.default_amount ?? 50)
     }
   }
 
+  // 2. บันทึกการตั้งค่าราคาค่าบริการ และ อัปเดตค่าปรับลง fine_types
   const handleUpdatePricing = async (e) => {
     e.preventDefault()
     setIsUpdatingRate(true)
 
-    const { error } = await supabase
+    // อัปเดตเรทค่าจอดใน pricing_rates
+    const { error: rateError } = await supabase
       .from('pricing_rates')
-      .update({
+      .upsert({
+        rate_id: rate?.rate_id || 1,
         first_hour_rate: Number(inputFirstRate),
-        next_hour_rate: Number(inputNextRate),
-        fine_rate: Number(inputFineRate)
+        next_hour_rate: Number(inputNextRate)
       })
-      .eq('rate_id', rate.rate_id || 1)
 
-    if (error) {
-      showAlert('เกิดข้อผิดพลาดในการตั้งค่าราคา: ' + error.message, 'เกิดข้อผิดพลาด', 'error')
+    // อัปเดตเรทค่าปรับใน fine_types
+    const { error: fineError } = await supabase
+      .from('fine_types')
+      .upsert({
+        fine_type_id: 1,
+        type_name: 'จอดรถเกินเวลา',
+        default_amount: Number(inputFineRate)
+      })
+
+    if (rateError || fineError) {
+      showAlert('เกิดข้อผิดพลาดในการตั้งค่าราคา: ' + (rateError?.message || fineError?.message), 'เกิดข้อผิดพลาด', 'error')
     } else {
-      showAlert('บันทึกอัตราค่าบริการและค่าปรับใหม่เรียบร้อยแล้ว!', 'บันทึกสำเร็จ', 'success')
+      showAlert('บันทึกอัตราค่าบริการและค่าปรับลงฐานข้อมูลเรียบร้อยแล้ว!', 'บันทึกสำเร็จ', 'success')
       fetchPricingRate()
     }
     setIsUpdatingRate(false)
+  }
+
+  const handleIssueFine = async (ticketId, fineAmount) => {
+    const { error } = await supabase.from('fines').insert([{
+      ticket_id: ticketId,
+      fine_type_id: 1, // 1 = จอดรถเกินเวลา
+      reported_by_user: currentUser?.user_id || null,
+      fine_amount: fineAmount,
+      reported_at: new Date().toISOString()
+    }])
+
+    if (error) {
+      console.error('Error issuing fine:', error)
+    }
   }
 
   // ยืนยันการจอง (แก้เรื่อง status column ไม่พบ)
@@ -174,16 +210,19 @@ export default function HomePage() {
     }
     if (!licensePlate || !phone || !selectedSlot) return
 
+    // ดึง rate_id ล่าสุดจาก State หรือตั้งต้นเป็น 1
+    const activeRateId = rate?.rate_id || 1
+
     const ticketId = `TK-${Date.now()}-${selectedSlot.slot_id}`
     const entryTime = new Date()
     const exitTime = new Date(entryTime.getTime() + hoursToPark * 60 * 60 * 1000)
 
-    // 1. บันทึกลง parking_transactions (ตัด status ออกเนื่องจากไม่มีใน Schema)
+    // บันทึกลง parking_transactions
     const { error: txError } = await supabase.from('parking_transactions').insert([{
       ticket_id: ticketId,
       user_id: currentUser.user_id,
       slot_id: selectedSlot.slot_id,
-      rate_id: rate.rate_id || 1,
+      rate_id: activeRateId,
       license_plate: licensePlate.toUpperCase(),
       entry_time: entryTime.toISOString(),
       expected_exit: exitTime.toISOString(),
@@ -196,7 +235,7 @@ export default function HomePage() {
       return
     }
 
-    // 2. บันทึกลง payments ตาม ER Diagram
+    // บันทึกลง payments
     await supabase.from('payments').insert([{
       ticket_id: ticketId,
       amount: calculatedPrice,
@@ -205,7 +244,7 @@ export default function HomePage() {
       status: 'COMPLETED'
     }])
 
-    // 3. ปรับสถานะช่องจอด
+    // ปรับสถานะช่องจอดเป็น OCCUPIED
     await supabase.from('parking_slots')
       .update({ status: 'OCCUPIED' })
       .eq('slot_id', selectedSlot.slot_id)
@@ -216,7 +255,7 @@ export default function HomePage() {
 
     handleSearchTicket(licensePlate.toUpperCase())
     setActiveTab('status')
-    
+
     setSelectedSlot(null)
     setLicensePlate('')
   }
@@ -325,9 +364,9 @@ export default function HomePage() {
   const handleBulkUpdateStatus = (newStatus) => {
     if (selectedSlotIds.length === 0) return
 
-    const statusLabel = 
-      newStatus === 'AVAILABLE' ? 'ว่าง' : 
-      newStatus === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
+    const statusLabel =
+      newStatus === 'AVAILABLE' ? 'ว่าง' :
+        newStatus === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
 
     showConfirm(
       `คุณต้องการเปลี่ยนสถานะช่องจอดที่เลือกจำนวน ${selectedSlotIds.length} รายการ เป็น "${statusLabel}" ใช่หรือไม่?`,
@@ -425,26 +464,23 @@ export default function HomePage() {
       <div className="w-full max-w-6xl flex gap-2 mb-6">
         <button
           onClick={() => setActiveTab('booking')}
-          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${
-            activeTab === 'booking' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
-          }`}
+          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${activeTab === 'booking' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
+            }`}
         >
           <i className="fa-solid fa-car mr-2"></i> เลือกช่องจอดรถ (Real-time)
         </button>
         <button
           onClick={() => setActiveTab('status')}
-          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${
-            activeTab === 'status' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
-          }`}
+          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${activeTab === 'status' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
+            }`}
         >
           <i className="fa-solid fa-clock mr-2"></i> ตรวจสอบสถานะการจอง
         </button>
         {currentUser?.role === 'ADMIN' && (
           <button
             onClick={() => setActiveTab('admin')}
-            className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${
-              activeTab === 'admin' ? 'bg-slate-800 text-white border-slate-800 shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
-            }`}
+            className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${activeTab === 'admin' ? 'bg-slate-800 text-white border-slate-800 shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
+              }`}
           >
             <i className="fa-solid fa-sliders mr-2"></i> แผงควบคุม Admin
           </button>
@@ -494,7 +530,7 @@ export default function HomePage() {
                 <span className="text-xs font-bold text-slate-600 block">
                   พบรายการจองทั้งหมด {userTickets.length} รายการ:
                 </span>
-                
+
                 {userTickets.map((ticket) => (
                   <div key={ticket.ticket_id} className="bg-slate-50 border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
                     <div className="flex items-center justify-between pb-3 border-b border-slate-200">
@@ -676,7 +712,7 @@ export default function HomePage() {
                     <span className="text-[11px] font-bold text-slate-700 px-2">
                       เลือกอยู่ {selectedSlotIds.length} รายการ:
                     </span>
-                    
+
                     <button
                       onClick={() => handleBulkUpdateStatus('AVAILABLE')}
                       className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold rounded-lg transition-all shadow-2xs flex items-center gap-1"
@@ -721,11 +757,10 @@ export default function HomePage() {
                         <button
                           key={floor}
                           onClick={() => setAdminManageFloor(floor)}
-                          className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
-                            adminManageFloor === floor
+                          className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${adminManageFloor === floor
                               ? 'bg-[#52B762] text-white shadow-xs'
                               : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                          }`}
+                            }`}
                         >
                           ชั้น {floor}
                         </button>
@@ -743,11 +778,10 @@ export default function HomePage() {
                           <button
                             key={zone}
                             onClick={() => setAdminManageZone(zone)}
-                            className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${
-                              adminManageZone === zone
+                            className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${adminManageZone === zone
                                 ? 'bg-slate-800 text-white shadow-xs'
                                 : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                            }`}
+                              }`}
                           >
                             โซน {zone} (Zone {zone})
                           </button>
@@ -784,23 +818,22 @@ export default function HomePage() {
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                         {filteredAdminSlots.map(s => {
                           const isChecked = selectedSlotIds.includes(s.slot_id)
-                          const statusBg = 
+                          const statusBg =
                             s.status === 'AVAILABLE' ? 'text-emerald-600 bg-emerald-50 border-emerald-200' :
-                            s.status === 'OCCUPIED' ? 'text-amber-600 bg-amber-50 border-amber-200' :
-                            'text-slate-500 bg-slate-100 border-slate-300'
+                              s.status === 'OCCUPIED' ? 'text-amber-600 bg-amber-50 border-amber-200' :
+                                'text-slate-500 bg-slate-100 border-slate-300'
 
-                          const statusText = 
+                          const statusText =
                             s.status === 'AVAILABLE' ? 'ว่าง' :
-                            s.status === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
+                              s.status === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
 
                           return (
                             <div
                               key={s.slot_id}
-                              className={`p-3 rounded-xl border flex items-center justify-between transition-all ${
-                                isChecked
+                              className={`p-3 rounded-xl border flex items-center justify-between transition-all ${isChecked
                                   ? 'bg-rose-50/70 border-rose-300 ring-1 ring-rose-200'
                                   : 'bg-white border-slate-200 hover:border-slate-300 shadow-2xs'
-                              }`}
+                                }`}
                             >
                               <div className="flex items-center gap-2.5">
                                 <input
@@ -910,9 +943,9 @@ export default function HomePage() {
             <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center mb-5">
               <span className="text-[11px] font-semibold text-slate-600 block mb-2">สแกน QR Code เพื่อชำระเงิน</span>
               <div className="w-36 h-36 bg-white border border-slate-200 rounded-xl mx-auto flex items-center justify-center overflow-hidden p-2 shadow-2xs">
-                <img 
-                  src="/3Gdbm1.png" 
-                  alt="QR Code สำหรับชำระเงิน" 
+                <img
+                  src="/3Gdbm1.png"
+                  alt="QR Code สำหรับชำระเงิน"
                   className="w-full h-full object-contain"
                   onError={(e) => {
                     e.target.onerror = null;
