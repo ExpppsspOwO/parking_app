@@ -24,6 +24,18 @@ export default function HomePage() {
   })
   const [confirmCallback, setConfirmCallback] = useState(null)
 
+  // Fine Payment Modal State
+  const [fineModal, setFineModal] = useState({
+    isOpen: false,
+    ticket: null,
+    diffHours: 0,
+    totalFine: 0
+  })
+
+  // Admin Financial Reports State
+  const [paymentsList, setPaymentsList] = useState([])
+  const [finesList, setFinesList] = useState([])
+
   const showAlert = (message, title = 'ดำเนินการสำเร็จ', type = 'success') => {
     setAlertModal({ isOpen: true, title, message, type })
   }
@@ -82,10 +94,13 @@ export default function HomePage() {
     if (activeTab === 'status' && currentUser) {
       fetchUserTickets()
     }
+    if (activeTab === 'admin' && currentUser?.role === 'ADMIN') {
+      fetchAdminFinancials()
+    }
   }, [activeTab, currentUser])
 
   const uniqueFloors = Array.from(new Set(slots.map(s => s.floor_no))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-
+  
   const bookingAvailableZones = Array.from(
     new Set(slots.filter(s => s.floor_no === bookingFloor).map(s => s.zone_code))
   ).sort()
@@ -174,6 +189,22 @@ export default function HomePage() {
     }
   }
 
+  // 📊 ดึงข้อมูลรายงานการเงินสำหรับ Admin (Payments & Fines)
+  const fetchAdminFinancials = async () => {
+    const { data: payData } = await supabase
+      .from('payments')
+      .select('*, parking_transactions(license_plate, slot_id, user_id)')
+      .order('paid_at', { ascending: false })
+
+    const { data: fineData } = await supabase
+      .from('fines')
+      .select('*, parking_transactions(license_plate, slot_id)')
+      .order('reported_at', { ascending: false })
+
+    setPaymentsList(payData || [])
+    setFinesList(fineData || [])
+  }
+
   const handleUpdatePricing = async (e) => {
     e.preventDefault()
     setIsUpdatingRate(true)
@@ -245,72 +276,89 @@ export default function HomePage() {
 
     setActiveTab('status')
     fetchUserTickets(cleanPlate)
-
+    
     setSelectedSlot(null)
     setLicensePlate('')
   }
 
-  // 🚗 ฟังก์ชันให้ผู้ใช้กดนำรถออก / คืนช่องจอด (แก้ไขเรื่อง Timezone)
+  // 🚗 ตรวจสอบการนำรถออก และเปิด Fine Modal หากเกินเวลา
   const handleCheckOutSlot = (ticket) => {
-    showConfirm(
-      `คุณต้องการนำรถออกจากช่อง ${ticket.slot_id} และคืนช่องจอดใช่หรือไม่?`,
-      'ยืนยันการคืนช่องจอด',
-      async () => {
-        const now = new Date()
-        
-        // 🔥 แก้ไขการอ่านเวลาจาก DB ให้เป็น UTC ที่ถูกต้องโดยเติม 'Z' ต่อท้ายถ้าไม่มี
-        const exitStr = ticket.expected_exit.endsWith('Z') ? ticket.expected_exit : ticket.expected_exit + 'Z'
-        const expectedExit = new Date(exitStr)
-        
-        let fineInfoText = ''
+    const now = new Date()
+    const exitStr = ticket.expected_exit.endsWith('Z') ? ticket.expected_exit : ticket.expected_exit + 'Z'
+    const expectedExit = new Date(exitStr)
 
-        // 1. บันทึกเวลาออกจริง (actual_exit) ลงในตั๋วใบนี้เพื่อปิดสถานะการจอง
-        const { error: updateTxError } = await supabase
-          .from('parking_transactions')
-          .update({ actual_exit: now.toISOString() })
-          .eq('ticket_id', ticket.ticket_id)
+    if (now > expectedExit) {
+      const diffMs = now.getTime() - expectedExit.getTime()
+      const diffHours = Math.ceil(diffMs / (1000 * 60 * 60))
+      const fineRate = rate?.fine_rate || 50
+      const totalFine = diffHours * fineRate
 
-        if (updateTxError) {
-          showAlert('เกิดข้อผิดพลาดในการอัปเดตตั๋ว: ' + updateTxError.message, 'เกิดข้อผิดพลาด', 'error')
-          return
+      setFineModal({
+        isOpen: true,
+        ticket,
+        diffHours,
+        totalFine
+      })
+    } else {
+      showConfirm(
+        `คุณต้องการนำรถออกจากช่อง ${ticket.slot_id} และคืนช่องจอดใช่หรือไม่?`,
+        'ยืนยันการคืนช่องจอด',
+        async () => {
+          await processCheckOut(ticket, 0)
         }
+      )
+    }
+  }
 
-        // 2. คำนวณค่าปรับกรณีจอดเกินเวลาจริง
-        if (now > expectedExit) {
-          const diffMs = now.getTime() - expectedExit.getTime()
-          const diffHours = Math.ceil(diffMs / (1000 * 60 * 60))
-          const fineRate = rate?.fine_rate || 50
-          const totalFine = diffHours * fineRate
+  // ประมวลผลการคืนช่องจอดและบันทึกค่าปรับ/การชำระเงิน
+  const processCheckOut = async (ticket, totalFine = 0) => {
+    const now = new Date()
 
-          await supabase.from('fines').insert([{
-            ticket_id: ticket.ticket_id,
-            fine_type_id: 1, // 1 = จอดรถเกินเวลา
-            reported_by_user: currentUser?.user_id || ticket.user_id,
-            fine_amount: totalFine,
-            reported_at: now.toISOString()
-          }])
+    if (totalFine > 0) {
+      // 1. บันทึกลงตาราง fines
+      await supabase.from('fines').insert([{
+        ticket_id: ticket.ticket_id,
+        fine_type_id: 1,
+        reported_by_user: currentUser?.user_id || ticket.user_id,
+        fine_amount: totalFine,
+        reported_at: now.toISOString()
+      }])
 
-          fineInfoText = ` (เกินเวลาจอดไป ${diffHours} ชม. มีค่าปรับ ${totalFine} บาท)`
-        }
+      // 2. บันทึกลงตาราง payments
+      await supabase.from('payments').insert([{
+        ticket_id: ticket.ticket_id,
+        amount: totalFine,
+        payment_method: 'QR_PROMPTPAY',
+        paid_at: now.toISOString(),
+        status: 'COMPLETED'
+      }])
+    }
 
-        // 3. คืนสถานะช่องจอดเป็น AVAILABLE ให้คนอื่นจองต่อได้
-        const { error: updateSlotError } = await supabase
-          .from('parking_slots')
-          .update({ status: 'AVAILABLE' })
-          .eq('slot_id', ticket.slot_id)
+    // 3. บันทึกเวลาออกจริง
+    await supabase
+      .from('parking_transactions')
+      .update({ actual_exit: now.toISOString() })
+      .eq('ticket_id', ticket.ticket_id)
 
-        if (updateSlotError) {
-          showAlert('เกิดข้อผิดพลาดในการคืนช่องจอด: ' + updateSlotError.message, 'เกิดข้อผิดพลาด', 'error')
-        } else {
-          showAlert(`นำรถออกจากช่อง ${ticket.slot_id} และคืนช่องจอดเรียบร้อยแล้ว!${fineInfoText}`, 'คืนช่องจอดสำเร็จ', 'success')
-          fetchSlots()
-          fetchUserTickets(searchPlate)
-        }
-      }
+    // 4. คืนสถานะช่องจอดเป็น AVAILABLE
+    await supabase
+      .from('parking_slots')
+      .update({ status: 'AVAILABLE' })
+      .eq('slot_id', ticket.slot_id)
+
+    showAlert(
+      totalFine > 0 
+        ? `ชำระค่าปรับ ${totalFine} บาท และคืนช่องจอด ${ticket.slot_id} เรียบร้อยแล้ว!` 
+        : `นำรถออกจากช่อง ${ticket.slot_id} และคืนช่องจอดเรียบร้อยแล้ว!`,
+      'คืนช่องจอดสำเร็จ',
+      'success'
     )
-  } 
 
-  // 🐛 แก้ไขบัค: ใช้ ignoreDuplicates: true เพื่อข้ามช่องจอดที่มีอยู่แล้ว และไม่รีเซ็ตสถานะเดิมให้เป็น AVAILABLE
+    setFineModal({ isOpen: false, ticket: null, diffHours: 0, totalFine: 0 })
+    fetchSlots()
+    fetchUserTickets(searchPlate)
+  }
+
   const handleBulkCreateSlots = async () => {
     if (!adminFloor || !adminZone || !bulkCount || bulkCount <= 0) {
       showAlert('กรุณากรอกข้อมูล ชั้น โซน และจำนวนช่องจอดให้ครบถ้วน', 'ข้อมูลไม่ครบถ้วน', 'error')
@@ -338,7 +386,7 @@ export default function HomePage() {
     if (error) {
       showAlert('เกิดข้อผิดพลาด: ' + error.message, 'เกิดข้อผิดพลาด', 'error')
     } else {
-      showAlert(`ประมวลผลช่องจอด ${floor}${prefix}1 ถึง ${floor}${prefix}${bulkCount} เรียบร้อยแล้ว! (ช่องจอดที่มีอยู่เดิมคงสถานะเดิมไว้)`, 'สร้างช่องจอดสำเร็จ', 'success')
+      showAlert(`ประมวลผลช่องจอด ${floor}${prefix}1 ถึง ${floor}${prefix}${bulkCount} เรียบร้อยแล้ว!`, 'สร้างช่องจอดสำเร็จ', 'success')
       fetchSlots()
       setAdminManageFloor(floor)
       setAdminManageZone(prefix)
@@ -376,9 +424,9 @@ export default function HomePage() {
   const handleBulkUpdateStatus = (newStatus) => {
     if (selectedSlotIds.length === 0) return
 
-    const statusLabel =
-      newStatus === 'AVAILABLE' ? 'ว่าง' :
-        newStatus === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
+    const statusLabel = 
+      newStatus === 'AVAILABLE' ? 'ว่าง' : 
+      newStatus === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
 
     showConfirm(
       `คุณต้องการเปลี่ยนสถานะช่องจอดที่เลือกจำนวน ${selectedSlotIds.length} รายการ เป็น "${statusLabel}" ใช่หรือไม่?`,
@@ -437,6 +485,11 @@ export default function HomePage() {
     s => s.floor_no === adminManageFloor && s.zone_code === adminManageZone
   )
 
+  // คำนวณสรุปยอดการเงินสำหรับ Admin
+  const totalRevenue = paymentsList.reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+  const totalFines = finesList.reduce((acc, f) => acc + (Number(f.fine_amount) || 0), 0)
+  const totalParkingRevenue = totalRevenue - totalFines
+
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-start p-4 md:p-8 text-[#0F172A]">
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
@@ -475,23 +528,26 @@ export default function HomePage() {
       <div className="w-full max-w-6xl flex gap-2 mb-6">
         <button
           onClick={() => setActiveTab('booking')}
-          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${activeTab === 'booking' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
-            }`}
+          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${
+            activeTab === 'booking' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
+          }`}
         >
           <i className="fa-solid fa-car mr-2"></i> เลือกช่องจอดรถ (Real-time)
         </button>
         <button
           onClick={() => setActiveTab('status')}
-          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${activeTab === 'status' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
-            }`}
+          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${
+            activeTab === 'status' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
+          }`}
         >
           <i className="fa-solid fa-clock mr-2"></i> ตรวจสอบสถานะการจอง
         </button>
         {currentUser?.role === 'ADMIN' && (
           <button
             onClick={() => setActiveTab('admin')}
-            className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${activeTab === 'admin' ? 'bg-slate-800 text-white border-slate-800 shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
-              }`}
+            className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${
+              activeTab === 'admin' ? 'bg-slate-800 text-white border-slate-800 shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
+            }`}
           >
             <i className="fa-solid fa-sliders mr-2"></i> แผงควบคุม Admin
           </button>
@@ -533,8 +589,8 @@ export default function HomePage() {
                 placeholder="ค้นหาเฉพาะป้ายทะเบียนของคุณ..."
                 className="flex-1 bg-slate-50 border border-slate-200 h-11 rounded-xl px-4 text-xs font-medium uppercase focus:outline-none focus:border-[#52B762]"
               />
-              <button
-                onClick={() => fetchUserTickets(searchPlate)}
+              <button 
+                onClick={() => fetchUserTickets(searchPlate)} 
                 className="px-6 bg-[#52B762] hover:bg-[#439E51] text-white text-xs font-semibold rounded-xl transition-all shadow-xs"
               >
                 ค้นหา
@@ -550,9 +606,8 @@ export default function HomePage() {
                 <span className="text-xs font-bold text-slate-600 block">
                   พบรายการจองทั้งหมดของคุณ {userTickets.length} รายการ:
                 </span>
-
+                
                 {userTickets.map((ticket) => {
-                  // ตรวจสอบว่าตั๋วใบนี้ยังจอดอยู่หรือไม่ (ต้องยังไม่มี actual_exit)
                   const isCurrentlyParked = !ticket.actual_exit
 
                   return (
@@ -564,11 +619,12 @@ export default function HomePage() {
                             {ticket.license_plate || 'ไม่ระบุป้ายทะเบียน'}
                           </h3>
                         </div>
-
-                        <span className={`text-xs font-semibold px-3 py-1 rounded-full border ${isCurrentlyParked
-                            ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                        
+                        <span className={`text-xs font-semibold px-3 py-1 rounded-full border ${
+                          isCurrentlyParked 
+                            ? 'bg-emerald-100 text-emerald-800 border-emerald-200' 
                             : 'bg-slate-200 text-slate-600 border-slate-300'
-                          }`}>
+                        }`}>
                           {isCurrentlyParked ? '✓ กำลังจอดอยู่' : 'คืนช่องจอดแล้ว'}
                         </span>
                       </div>
@@ -600,7 +656,6 @@ export default function HomePage() {
                         </div>
                       </div>
 
-                      {/* แสดงปุ่มคืนช่องจอด เฉพาะตั๋วที่ยังจอดอยู่เท่านั้น */}
                       {isCurrentlyParked && (
                         <button
                           onClick={() => handleCheckOutSlot(ticket)}
@@ -625,18 +680,31 @@ export default function HomePage() {
         {/* ==================== TAB 3: แผงควบคุม ADMIN ==================== */}
         {activeTab === 'admin' && currentUser?.role === 'ADMIN' && (
           <div className="space-y-6">
-            <div className="grid grid-cols-3 gap-4">
-              <div className="bg-white p-4 border rounded-2xl text-center shadow-xs">
-                <span className="text-xs text-slate-400">ช่องจอดทั้งหมด</span>
+            
+            {/* 📊 สรุปภาพรวมช่องจอด และ ยอดเงินการเงิน */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="bg-white p-4 border border-slate-200 rounded-2xl text-center shadow-xs">
+                <span className="text-xs text-slate-400 block mb-1">ช่องจอดทั้งหมด</span>
                 <p className="text-2xl font-bold text-slate-800">{slots.length}</p>
+                <span className="text-[10px] text-emerald-600 mt-1 block">ว่าง {slots.filter(s => s.status === 'AVAILABLE').length} ช่อง</span>
               </div>
-              <div className="bg-white p-4 border rounded-2xl text-center shadow-xs">
-                <span className="text-xs text-slate-400">สถานะว่าง</span>
-                <p className="text-2xl font-bold text-[#52B762]">{slots.filter(s => s.status === 'AVAILABLE').length}</p>
+
+              <div className="bg-white p-4 border border-slate-200 rounded-2xl text-center shadow-xs">
+                <span className="text-xs text-slate-400 block mb-1">รายได้รวมทั้งหมด</span>
+                <p className="text-2xl font-bold text-[#52B762]">{totalRevenue.toLocaleString()} ฿</p>
+                <span className="text-[10px] text-slate-400 mt-1 block">จากตาราง payments</span>
               </div>
-              <div className="bg-white p-4 border rounded-2xl text-center shadow-xs">
-                <span className="text-xs text-slate-400">ไม่ว่าง / ไม่พร้อมใช้งาน</span>
-                <p className="text-2xl font-bold text-rose-500">{slots.filter(s => s.status !== 'AVAILABLE').length}</p>
+
+              <div className="bg-white p-4 border border-slate-200 rounded-2xl text-center shadow-xs">
+                <span className="text-xs text-slate-400 block mb-1">รายได้ค่าบริการจอด</span>
+                <p className="text-2xl font-bold text-sky-600">{totalParkingRevenue.toLocaleString()} ฿</p>
+                <span className="text-[10px] text-slate-400 mt-1 block">ยอดชำระการจองปกติ</span>
+              </div>
+
+              <div className="bg-white p-4 border border-slate-200 rounded-2xl text-center shadow-xs">
+                <span className="text-xs text-slate-400 block mb-1">รายได้ค่าปรับเกินเวลา</span>
+                <p className="text-2xl font-bold text-rose-500">{totalFines.toLocaleString()} ฿</p>
+                <span className="text-[10px] text-slate-400 mt-1 block">จากตาราง fines</span>
               </div>
             </div>
 
@@ -759,7 +827,7 @@ export default function HomePage() {
                     <span className="text-[11px] font-bold text-slate-700 px-2">
                       เลือกอยู่ {selectedSlotIds.length} รายการ:
                     </span>
-
+                    
                     <button
                       onClick={() => handleBulkUpdateStatus('AVAILABLE')}
                       className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold rounded-lg transition-all shadow-2xs flex items-center gap-1"
@@ -804,10 +872,11 @@ export default function HomePage() {
                         <button
                           key={floor}
                           onClick={() => setAdminManageFloor(floor)}
-                          className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${adminManageFloor === floor
+                          className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                            adminManageFloor === floor
                               ? 'bg-[#52B762] text-white shadow-xs'
                               : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                            }`}
+                          }`}
                         >
                           ชั้น {floor}
                         </button>
@@ -825,10 +894,11 @@ export default function HomePage() {
                           <button
                             key={zone}
                             onClick={() => setAdminManageZone(zone)}
-                            className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${adminManageZone === zone
+                            className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${
+                              adminManageZone === zone
                                 ? 'bg-slate-800 text-white shadow-xs'
                                 : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                              }`}
+                            }`}
                           >
                             โซน {zone} (Zone {zone})
                           </button>
@@ -865,22 +935,23 @@ export default function HomePage() {
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                         {filteredAdminSlots.map(s => {
                           const isChecked = selectedSlotIds.includes(s.slot_id)
-                          const statusBg =
+                          const statusBg = 
                             s.status === 'AVAILABLE' ? 'text-emerald-600 bg-emerald-50 border-emerald-200' :
-                              s.status === 'OCCUPIED' ? 'text-amber-600 bg-amber-50 border-amber-200' :
-                                'text-slate-500 bg-slate-100 border-slate-300'
+                            s.status === 'OCCUPIED' ? 'text-amber-600 bg-amber-50 border-amber-200' :
+                            'text-slate-500 bg-slate-100 border-slate-300'
 
-                          const statusText =
+                          const statusText = 
                             s.status === 'AVAILABLE' ? 'ว่าง' :
-                              s.status === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
+                            s.status === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
 
                           return (
                             <div
                               key={s.slot_id}
-                              className={`p-3 rounded-xl border flex items-center justify-between transition-all ${isChecked
+                              className={`p-3 rounded-xl border flex items-center justify-between transition-all ${
+                                isChecked
                                   ? 'bg-rose-50/70 border-rose-300 ring-1 ring-rose-200'
                                   : 'bg-white border-slate-200 hover:border-slate-300 shadow-2xs'
-                                }`}
+                              }`}
                             >
                               <div className="flex items-center gap-2.5">
                                 <input
@@ -897,7 +968,6 @@ export default function HomePage() {
                                 </div>
                               </div>
 
-                              {/* ลบปุ่มสลับออก คงเหลือแค่ปุ่มลบ */}
                               <div className="flex items-center gap-1">
                                 <button
                                   onClick={() => handleDeleteSlot(s.slot_id)}
@@ -914,6 +984,49 @@ export default function HomePage() {
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* 🧾 รายงานประวัติการชำระเงินและใบปรับเงิน (Payments & Fines Audit Table) */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
+              <h4 className="text-sm font-bold text-slate-800 mb-1">รายงานประวัติการชำระเงินย้อนหลัง (Payment History)</h4>
+              <p className="text-xs text-slate-400 mb-4">ข้อมูลธุรกรรมการชำระเงินจากตาราง payments</p>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50 text-slate-600">
+                      <th className="p-3">Ticket ID</th>
+                      <th className="p-3">ทะเบียนรถ</th>
+                      <th className="p-3">ช่องจอด</th>
+                      <th className="p-3">ยอดชำระ</th>
+                      <th className="p-3">วิธีชำระ</th>
+                      <th className="p-3">วันที่ชำระเงิน</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {paymentsList.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="p-4 text-center text-slate-400">ยังไม่มีข้อมูลการชำระเงิน</td>
+                      </tr>
+                    ) : (
+                      paymentsList.map(pay => (
+                        <tr key={pay.payment_id || pay.paid_at} className="hover:bg-slate-50">
+                          <td className="p-3 font-mono font-semibold text-slate-700">{pay.ticket_id}</td>
+                          <td className="p-3 font-bold text-slate-800">{pay.parking_transactions?.license_plate || '-'}</td>
+                          <td className="p-3 font-bold text-[#52B762]">{pay.parking_transactions?.slot_id || '-'}</td>
+                          <td className="p-3 font-bold text-slate-900">{pay.amount} ฿</td>
+                          <td className="p-3">
+                            <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-md text-[10px] font-semibold">
+                              {pay.payment_method}
+                            </span>
+                          </td>
+                          <td className="p-3 text-slate-500">{new Date(pay.paid_at).toLocaleString('th-TH')}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
           </div>
@@ -984,9 +1097,9 @@ export default function HomePage() {
             <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center mb-5">
               <span className="text-[11px] font-semibold text-slate-600 block mb-2">สแกน QR Code เพื่อชำระเงิน</span>
               <div className="w-36 h-36 bg-white border border-slate-200 rounded-xl mx-auto flex items-center justify-center overflow-hidden p-2 shadow-2xs">
-                <img
-                  src="/3Gdbm1.png"
-                  alt="QR Code สำหรับชำระเงิน"
+                <img 
+                  src="/3Gdbm1.png" 
+                  alt="QR Code สำหรับชำระเงิน" 
                   className="w-full h-full object-contain"
                   onError={(e) => {
                     e.target.onerror = null;
@@ -1002,6 +1115,59 @@ export default function HomePage() {
               className="w-full h-11 bg-[#52B762] hover:bg-[#439E51] text-white text-xs font-semibold rounded-xl transition-all shadow-xs"
             >
               ยืนยันการชำระเงินและออกตั๋ว
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ชำระค่าปรับกรณีจอดเกินเวลา */}
+      {fineModal.isOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 w-full max-w-sm rounded-3xl p-6 shadow-xl transform transition-all duration-300 animate-[popIn_0.22s_ease-out]">
+            <style jsx>{`
+              @keyframes popIn {
+                0% { opacity: 0; transform: scale(0.82); }
+                100% { opacity: 1; transform: scale(1); }
+              }
+            `}</style>
+
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-sm font-bold text-rose-600 flex items-center gap-2">
+                <i className="fa-solid fa-triangle-exclamation"></i> จอดเกินเวลาที่กำหนด
+              </h3>
+              <button onClick={() => setFineModal({ isOpen: false, ticket: null, diffHours: 0, totalFine: 0 })} className="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+
+            <p className="text-xs text-slate-500 mb-4">
+              ตั๋วหมายเลข <span className="font-mono font-bold">{fineModal.ticket?.ticket_id}</span> จอดเกินเวลาที่กำหนดไป <span className="font-bold text-rose-600">{fineModal.diffHours} ชั่วโมง</span>
+            </p>
+
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex justify-between items-center text-xs mb-4">
+              <span className="text-rose-700 font-medium">ค่าปรับเกินเวลาคงค้าง:</span>
+              <span className="font-bold text-rose-600 text-base">{fineModal.totalFine} บาท</span>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center mb-5">
+              <span className="text-[11px] font-semibold text-slate-600 block mb-2">สแกน QR Code เพื่อชำระค่าปรับ</span>
+              <div className="w-36 h-36 bg-white border border-slate-200 rounded-xl mx-auto flex items-center justify-center overflow-hidden p-2 shadow-2xs">
+                <img 
+                  src="/3Gdbm1.png" 
+                  alt="QR Code สำหรับชำระค่าปรับ" 
+                  className="w-full h-full object-contain"
+                  onError={(e) => {
+                    e.target.onerror = null;
+                    e.target.src = 'https://via.placeholder.com/150?text=Place+QR+Here';
+                  }}
+                />
+              </div>
+              <p className="text-[10px] text-slate-400 mt-2">สแกนชำระเงินค่าปรับแล้วกดยืนยันเพื่อคืนช่องจอด</p>
+            </div>
+
+            <button
+              onClick={() => processCheckOut(fineModal.ticket, fineModal.totalFine)}
+              className="w-full h-11 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl transition-all shadow-xs"
+            >
+              ชำระค่าปรับ {fineModal.totalFine} บาท และคืนช่องจอด
             </button>
           </div>
         </div>
