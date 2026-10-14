@@ -36,6 +36,9 @@ export default function HomePage() {
   const [inputFineRate, setInputFineRate] = useState(50)
   const [isUpdatingRate, setIsUpdatingRate] = useState(false)
 
+  // Admin States - Bulk Select & Delete
+  const [selectedSlotIds, setSelectedSlotIds] = useState([])
+
   useEffect(() => {
     // โหลด Session ผู้ใช้
     const userStr = localStorage.getItem('currentUser')
@@ -49,7 +52,7 @@ export default function HomePage() {
     fetchPricingRate()
   }, [])
 
-  // คำนวณราคาค่าจอดล่วงหน้าตามชั่วโมงที่เลือก
+  // คำนวณราคาค่าจอดล่วงหน้า
   useEffect(() => {
     if (hoursToPark <= 1) {
       setCalculatedPrice(Number(rate.first_hour_rate || 20))
@@ -232,11 +235,57 @@ export default function HomePage() {
     fetchSlots()
   }
 
-  // Admin: ลบช่องจอด
+  // Admin: ลบช่องจอดเดี่ยว
   const handleDeleteSlot = async (slotId) => {
     if (confirm(`คุณต้องการลบช่องจอด ${slotId} ออกจากระบบใช่หรือไม่?`)) {
       await supabase.from('parking_slots').delete().eq('slot_id', slotId)
+      setSelectedSlotIds(prev => prev.filter(id => id !== slotId))
       fetchSlots()
+    }
+  }
+
+  // Admin: เลือก/ยกเลิก เลือกช่องจอดเดี่ยว
+  const handleToggleSelectSlot = (slotId) => {
+    setSelectedSlotIds(prev =>
+      prev.includes(slotId) ? prev.filter(id => id !== slotId) : [...prev, slotId]
+    )
+  }
+
+  // Admin: เลือกทั้งหมดในโซน
+  const handleSelectAllInZone = (zoneSlots, isChecked) => {
+    const zoneSlotIds = zoneSlots.map(s => s.slot_id)
+    if (isChecked) {
+      setSelectedSlotIds(prev => Array.from(new Set([...prev, ...zoneSlotIds])))
+    } else {
+      setSelectedSlotIds(prev => prev.filter(id => !zoneSlotIds.includes(id)))
+    }
+  }
+
+  // Admin: เลือกทั้งหมดในระบบ
+  const handleSelectAllGlobal = (isChecked) => {
+    if (isChecked) {
+      setSelectedSlotIds(slots.map(s => s.slot_id))
+    } else {
+      setSelectedSlotIds([])
+    }
+  }
+
+  // Admin: ลบรายการที่เลือกหลายๆ ช่องพร้อมกัน (Bulk Delete)
+  const handleBulkDeleteSlots = async () => {
+    if (selectedSlotIds.length === 0) return
+    if (confirm(`ยืนยันการลบช่องจอดที่เลือกจำนวน ${selectedSlotIds.length} รายการใช่หรือไม่?`)) {
+      const { error } = await supabase
+        .from('parking_slots')
+        .delete()
+        .in('slot_id', selectedSlotIds)
+
+      if (error) {
+        alert('เกิดข้อผิดพลาดในการลบ: ' + error.message)
+      } else {
+        alert(`ลบช่องจอดสำเร็จแล้ว ${selectedSlotIds.length} รายการ!`)
+        setSelectedSlotIds([])
+        fetchSlots()
+      }
     }
   }
 
@@ -336,7 +385,6 @@ export default function HomePage() {
             ) : (
               uniqueFloors.map(floor => {
                 const floorSlots = slots.filter(s => s.floor_no === floor)
-                // ดึงรายชื่อโซนทั้งหมดในชั้นนี้
                 const uniqueZones = Array.from(new Set(floorSlots.map(s => s.zone_code))).sort()
 
                 return (
@@ -345,7 +393,6 @@ export default function HomePage() {
                       <i className="fa-solid fa-layer-group text-[#52B762]"></i> ชั้น {floor}
                     </h3>
                     
-                    {/* วนลูปแยกกลุ่มตามโซน (Zone A, Zone B) */}
                     <div className="space-y-4">
                       {uniqueZones.map(zone => {
                         const zoneSlots = floorSlots.filter(s => s.zone_code === zone)
@@ -594,55 +641,129 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* ส่วนที่ 3: ตารางรายการช่องจอดทั้งหมด */}
-            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-              <div className="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
-                <h4 className="text-xs font-bold text-slate-700">รายการช่องจอดทั้งหมดในระบบ</h4>
-                <span className="text-[10px] text-slate-400">กดสลับสถานะหรือลบช่องจอดได้ทีละรายการ</span>
+            {/* ส่วนที่ 3: จัดการช่องจอดแบบจัดกลุ่ม ชั้น -> โซน พร้อมติ๊กลบทีละหลายช่อง (Bulk Delete) */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-6 pb-4 border-b border-slate-200">
+                <div>
+                  <h4 className="text-sm font-bold text-slate-800">รายการช่องจอดทั้งหมดในระบบ (จัดกลุ่มตามชั้นและโซน)</h4>
+                  <p className="text-xs text-slate-400">สามารถติ๊กเลือกช่องจอดเพื่อลบพร้อมกันทีเดียวหลายๆ ช่องได้</p>
+                </div>
+                
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer bg-slate-50 px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-100">
+                    <input
+                      type="checkbox"
+                      checked={slots.length > 0 && selectedSlotIds.length === slots.length}
+                      onChange={(e) => handleSelectAllGlobal(e.target.checked)}
+                      className="rounded border-slate-300 text-[#52B762] focus:ring-[#52B762]"
+                    />
+                    เลือกทั้งหมด ({slots.length})
+                  </label>
+
+                  {selectedSlotIds.length > 0 && (
+                    <button
+                      onClick={handleBulkDeleteSlots}
+                      className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl transition-all shadow-xs flex items-center gap-1.5"
+                    >
+                      <i className="fa-solid fa-trash-can"></i>
+                      ลบรายการที่เลือก ({selectedSlotIds.length})
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="max-h-[400px] overflow-y-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-100 text-slate-600 sticky top-0 border-b">
-                    <tr>
-                      <th className="p-3">รหัสช่องจอด</th>
-                      <th className="p-3">ชั้น</th>
-                      <th className="p-3">โซน</th>
-                      <th className="p-3">สถานะ</th>
-                      <th className="p-3 text-right">จัดการ</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {slots.map(s => (
-                      <tr key={s.slot_id} className="hover:bg-slate-50">
-                        <td className="p-3 font-mono font-bold text-slate-800">{s.slot_id}</td>
-                        <td className="p-3 text-slate-600">ชั้น {s.floor_no}</td>
-                        <td className="p-3 text-slate-600">Zone {s.zone_code}</td>
-                        <td className="p-3">
-                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-semibold ${
-                            s.status === 'AVAILABLE' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
-                          }`}>
-                            {s.status}
-                          </span>
-                        </td>
-                        <td className="p-3 text-right space-x-2">
-                          <button
-                            onClick={() => handleToggleSlotStatus(s.slot_id, s.status)}
-                            className="px-2.5 py-1 bg-slate-100 border border-slate-200 hover:bg-slate-200 rounded-lg text-[10px] font-medium"
-                          >
-                            สลับสถานะ
-                          </button>
-                          <button
-                            onClick={() => handleDeleteSlot(s.slot_id)}
-                            className="px-2.5 py-1 bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100 rounded-lg text-[10px] font-medium"
-                          >
-                            ลบ
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+
+              {uniqueFloors.length === 0 ? (
+                <div className="text-center py-8 text-xs text-slate-400">ยังไม่มีข้อมูลช่องจอดในระบบ</div>
+              ) : (
+                uniqueFloors.map(floor => {
+                  const floorSlots = slots.filter(s => s.floor_no === floor)
+                  const uniqueZones = Array.from(new Set(floorSlots.map(s => s.zone_code))).sort()
+
+                  return (
+                    <div key={floor} className="mb-6 bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                      <h5 className="text-xs font-bold text-slate-800 mb-3 flex items-center gap-2">
+                        <i className="fa-solid fa-layer-group text-[#52B762]"></i> ชั้น {floor}
+                      </h5>
+
+                      <div className="space-y-4">
+                        {uniqueZones.map(zone => {
+                          const zoneSlots = floorSlots.filter(s => s.zone_code === zone)
+                          const isAllZoneSelected = zoneSlots.length > 0 && zoneSlots.every(s => selectedSlotIds.includes(s.slot_id))
+
+                          return (
+                            <div key={zone} className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+                              <div className="flex justify-between items-center mb-3 pb-2 border-b border-slate-100">
+                                <span className="text-xs font-bold text-slate-700 flex items-center gap-2">
+                                  <span className="w-2.5 h-2.5 rounded-full bg-[#52B762]"></span>
+                                  โซน {zone} (Zone {zone})
+                                </span>
+                                
+                                <label className="flex items-center gap-1.5 text-[11px] text-slate-500 cursor-pointer hover:text-slate-800">
+                                  <input
+                                    type="checkbox"
+                                    checked={isAllZoneSelected}
+                                    onChange={(e) => handleSelectAllInZone(zoneSlots, e.target.checked)}
+                                    className="rounded border-slate-300 text-[#52B762] focus:ring-[#52B762]"
+                                  />
+                                  เลือกโซน {zone} ทั้งหมด ({zoneSlots.length})
+                                </label>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                                {zoneSlots.map(s => {
+                                  const isChecked = selectedSlotIds.includes(s.slot_id)
+                                  return (
+                                    <div
+                                      key={s.slot_id}
+                                      className={`p-3 rounded-xl border flex items-center justify-between transition-all ${
+                                        isChecked
+                                          ? 'bg-rose-50/70 border-rose-300 ring-1 ring-rose-200'
+                                          : 'bg-slate-50 border-slate-200 hover:border-slate-300'
+                                      }`}
+                                    >
+                                      <div className="flex items-center gap-2.5">
+                                        <input
+                                          type="checkbox"
+                                          checked={isChecked}
+                                          onChange={() => handleToggleSelectSlot(s.slot_id)}
+                                          className="rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                                        />
+                                        <div>
+                                          <span className="text-xs font-mono font-bold text-slate-800 block">{s.slot_id}</span>
+                                          <span className={`text-[10px] font-semibold ${
+                                            s.status === 'AVAILABLE' ? 'text-emerald-600' : 'text-rose-600'
+                                          }`}>
+                                            {s.status === 'AVAILABLE' ? 'ว่าง' : 'ไม่ว่าง'}
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center gap-1">
+                                        <button
+                                          onClick={() => handleToggleSlotStatus(s.slot_id, s.status)}
+                                          className="px-2 py-1 bg-white border border-slate-200 hover:bg-slate-100 rounded-lg text-[10px] font-medium text-slate-600"
+                                        >
+                                          สลับ
+                                        </button>
+                                        <button
+                                          onClick={() => handleDeleteSlot(s.slot_id)}
+                                          className="px-2 py-1 bg-rose-100 text-rose-700 hover:bg-rose-200 rounded-lg text-[10px] font-medium"
+                                        >
+                                          ลบ
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                })
+              )}
             </div>
 
           </div>
