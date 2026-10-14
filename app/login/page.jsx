@@ -50,7 +50,7 @@ export default function AuthPage() {
         const twentyHours = 20 * 60 * 60 * 1000
 
         const sessionData = {
-            ...data,
+            ...user,
             expiresAt: Date.now() + twentyHours // บันทึกเวลาหมดอายุล่วงหน้า 20 ชั่วโมง
         }
 
