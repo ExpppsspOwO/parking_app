@@ -13,6 +13,10 @@ export default function HomePage() {
   const [rate, setRate] = useState({ rate_id: 1, first_hour_rate: 20, next_hour_rate: 20, fine_rate: 50 })
   const [selectedSlot, setSelectedSlot] = useState(null)
 
+  // Booking Floor & Zone Selector States
+  const [bookingFloor, setBookingFloor] = useState('')
+  const [bookingZone, setBookingZone] = useState('')
+
   // Booking Form State
   const [licensePlate, setLicensePlate] = useState('')
   const [phone, setPhone] = useState('')
@@ -24,6 +28,10 @@ export default function HomePage() {
   const [searchPlate, setSearchPlate] = useState('')
   const [activeTicket, setActiveTicket] = useState(null)
   const [remainingTimeText, setRemainingTimeText] = useState('')
+
+  // Admin Floor & Zone Selector States
+  const [adminManageFloor, setAdminManageFloor] = useState('')
+  const [adminManageZone, setAdminManageZone] = useState('')
 
   // Admin Bulk Create State
   const [adminFloor, setAdminFloor] = useState('1')
@@ -50,6 +58,51 @@ export default function HomePage() {
     fetchSlots()
     fetchPricingRate()
   }, [])
+
+  // รายชื่อชั้นและโซนทั้งหมด
+  const uniqueFloors = Array.from(new Set(slots.map(s => s.floor_no))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+  
+  // โซนที่มีในชั้นที่เลือก (ฝั่ง Booking)
+  const bookingAvailableZones = Array.from(
+    new Set(slots.filter(s => s.floor_no === bookingFloor).map(s => s.zone_code))
+  ).sort()
+
+  // โซนที่มีในชั้นที่เลือก (ฝั่ง Admin)
+  const adminAvailableZones = Array.from(
+    new Set(slots.filter(s => s.floor_no === adminManageFloor).map(s => s.zone_code))
+  ).sort()
+
+  // กำหนดค่าเริ่มต้นสำหรับชั้นและโซนอัตโนมัติเมื่อดึงข้อมูลเสร็จ
+  useEffect(() => {
+    if (uniqueFloors.length > 0) {
+      if (!bookingFloor || !uniqueFloors.includes(bookingFloor)) {
+        setBookingFloor(uniqueFloors[0])
+      }
+      if (!adminManageFloor || !uniqueFloors.includes(adminManageFloor)) {
+        setAdminManageFloor(uniqueFloors[0])
+      }
+    }
+  }, [uniqueFloors])
+
+  useEffect(() => {
+    if (bookingAvailableZones.length > 0) {
+      if (!bookingZone || !bookingAvailableZones.includes(bookingZone)) {
+        setBookingZone(bookingAvailableZones[0])
+      }
+    } else {
+      setBookingZone('')
+    }
+  }, [bookingFloor, bookingAvailableZones])
+
+  useEffect(() => {
+    if (adminAvailableZones.length > 0) {
+      if (!adminManageZone || !adminAvailableZones.includes(adminManageZone)) {
+        setAdminManageZone(adminAvailableZones[0])
+      }
+    } else {
+      setAdminManageZone('')
+    }
+  }, [adminManageFloor, adminAvailableZones])
 
   // คำนวณราคาตามชั่วโมง
   useEffect(() => {
@@ -208,7 +261,6 @@ export default function HomePage() {
     const prefix = adminZone.trim().toUpperCase()
 
     for (let i = 1; i <= parseInt(bulkCount); i++) {
-      // สร้าง slot_id มีชั้นนำหน้า เช่น ชั้น 1 โซน A -> 1A1, 1A2 ...
       const uniqueSlotId = `${floor}${prefix}${i}`
       newSlots.push({
         slot_id: uniqueSlotId,
@@ -227,6 +279,8 @@ export default function HomePage() {
     } else {
       alert(`สร้างช่องจอด ${floor}${prefix}1 ถึง ${floor}${prefix}${bulkCount} บนชั้น ${floor} เรียบร้อยแล้ว!`)
       fetchSlots()
+      setAdminManageFloor(floor)
+      setAdminManageZone(prefix)
     }
   }
 
@@ -253,22 +307,13 @@ export default function HomePage() {
     )
   }
 
-  // เลือกทั้งหมดในโซน
-  const handleSelectAllInZone = (zoneSlots, isChecked) => {
-    const zoneSlotIds = zoneSlots.map(s => s.slot_id)
+  // เลือกทั้งหมดในโซนปัจจุบัน
+  const handleSelectAllInCurrentZone = (currentZoneSlots, isChecked) => {
+    const zoneSlotIds = currentZoneSlots.map(s => s.slot_id)
     if (isChecked) {
       setSelectedSlotIds(prev => Array.from(new Set([...prev, ...zoneSlotIds])))
     } else {
       setSelectedSlotIds(prev => prev.filter(id => !zoneSlotIds.includes(id)))
-    }
-  }
-
-  // เลือกทั้งหมดในระบบ
-  const handleSelectAllGlobal = (isChecked) => {
-    if (isChecked) {
-      setSelectedSlotIds(slots.map(s => s.slot_id))
-    } else {
-      setSelectedSlotIds([])
     }
   }
 
@@ -297,8 +342,14 @@ export default function HomePage() {
     router.push('/login')
   }
 
-  // รายชื่อชั้นทั้งหมดที่มีในระบบ
-  const uniqueFloors = Array.from(new Set(slots.map(s => s.floor_no))).sort()
+  // รายการช่องจอดตามชั้นและโซนที่เลือก
+  const filteredBookingSlots = slots.filter(
+    s => s.floor_no === bookingFloor && s.zone_code === bookingZone
+  )
+
+  const filteredAdminSlots = slots.filter(
+    s => s.floor_no === adminManageFloor && s.zone_code === adminManageZone
+  )
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-start p-4 md:p-8 text-[#0F172A]">
@@ -366,7 +417,7 @@ export default function HomePage() {
 
       <main className="w-full max-w-6xl">
         
-        {/* ==================== TAB 1: จองที่จอดรถ (ผู้ใช้งาน) ==================== */}
+        {/* ==================== TAB 1: เลือกช่องจอดรถ (เลือกชั้น -> เลือกโซน -> เลือกช่อง) ==================== */}
         {activeTab === 'booking' && (
           <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs">
             <div className="flex justify-between items-center mb-6 border-b pb-4">
@@ -384,61 +435,97 @@ export default function HomePage() {
             {uniqueFloors.length === 0 ? (
               <div className="text-center py-12 text-xs text-slate-400">ยังไม่มีข้อมูลช่องจอดในระบบ (ให้ Admin เพิ่มช่องจอดก่อน)</div>
             ) : (
-              uniqueFloors.map(floor => {
-                const floorSlots = slots.filter(s => s.floor_no === floor)
-                const uniqueZones = Array.from(new Set(floorSlots.map(s => s.zone_code))).sort()
+              <div className="space-y-6">
+                
+                {/* 1. ปุ่มกดเลือกชั้น (Floor Selector) */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                  <span className="text-xs font-bold text-slate-700 block mb-2.5">
+                    <i className="fa-solid fa-layer-group text-[#52B762] mr-1.5"></i> 1. เลือกชั้นที่ต้องการจอด:
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {uniqueFloors.map(floor => (
+                      <button
+                        key={floor}
+                        onClick={() => setBookingFloor(floor)}
+                        className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                          bookingFloor === floor
+                            ? 'bg-[#52B762] text-white shadow-xs'
+                            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        ชั้น {floor}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-                return (
-                  <div key={floor} className="mb-6 bg-slate-50 p-5 rounded-2xl border border-slate-200">
-                    <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
-                      <i className="fa-solid fa-layer-group text-[#52B762]"></i> ชั้น {floor}
-                    </h3>
-                    
-                    <div className="space-y-4">
-                      {uniqueZones.map(zone => {
-                        const zoneSlots = floorSlots.filter(s => s.zone_code === zone)
+                {/* 2. ปุ่มกดเลือกโซน (Zone Selector) */}
+                {bookingAvailableZones.length > 0 && (
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                    <span className="text-xs font-bold text-slate-700 block mb-2.5">
+                      <i className="fa-solid fa-grip text-[#52B762] mr-1.5"></i> 2. เลือกโซนในชั้น {bookingFloor}:
+                    </span>
+                    <div className="flex flex-wrap gap-2">
+                      {bookingAvailableZones.map(zone => (
+                        <button
+                          key={zone}
+                          onClick={() => setBookingZone(zone)}
+                          className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${
+                            bookingZone === zone
+                              ? 'bg-slate-800 text-white shadow-xs'
+                              : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          โซน {zone} (Zone {zone})
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. ตารางแสดงช่องจอดใน ชั้น + โซน ที่เลือก */}
+                <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                  <div className="flex justify-between items-center mb-4 pb-2 border-b border-slate-200">
+                    <span className="text-xs font-bold text-slate-700">
+                      3. เลือกช่องจอดบน <span className="text-[#52B762]">ชั้น {bookingFloor} • โซน {bookingZone}</span> ({filteredBookingSlots.length} ช่อง)
+                    </span>
+                  </div>
+
+                  {filteredBookingSlots.length === 0 ? (
+                    <div className="text-center py-8 text-xs text-slate-400">ไม่พบช่องจอดในโซนนี้</div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3">
+                      {filteredBookingSlots.map(s => {
+                        const isAvail = s.status === 'AVAILABLE'
+                        const isSelected = selectedSlot?.slot_id === s.slot_id
                         return (
-                          <div key={zone} className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-                            <h4 className="text-xs font-bold text-slate-600 mb-3 flex items-center gap-2">
-                              <span className="w-2.5 h-2.5 rounded-full bg-[#52B762]"></span> 
-                              โซน {zone} (Zone {zone})
-                            </h4>
-
-                            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3">
-                              {zoneSlots.map(s => {
-                                const isAvail = s.status === 'AVAILABLE'
-                                const isSelected = selectedSlot?.slot_id === s.slot_id
-                                return (
-                                  <button
-                                    key={s.slot_id}
-                                    disabled={!isAvail}
-                                    onClick={() => setSelectedSlot(s)}
-                                    className={`h-20 rounded-xl border flex flex-col items-center justify-center transition-all ${
-                                      !isAvail
-                                        ? 'bg-slate-200/80 border-slate-200 text-slate-400 cursor-not-allowed'
-                                        : isSelected
-                                        ? 'bg-[#52B762] text-white border-[#52B762] ring-2 ring-emerald-400 shadow-xs'
-                                        : 'bg-slate-50 border-slate-200 hover:bg-emerald-50 hover:border-emerald-300 text-slate-700'
-                                    }`}
-                                  >
-                                    <span className="text-sm font-mono font-bold">{s.slot_id}</span>
-                                    <span className="text-[10px] mt-1 font-medium">
-                                      {s.status === 'AVAILABLE' ? 'ว่าง' : 'ไม่ว่าง'}
-                                    </span>
-                                  </button>
-                                )
-                              })}
-                            </div>
-                          </div>
+                          <button
+                            key={s.slot_id}
+                            disabled={!isAvail}
+                            onClick={() => setSelectedSlot(s)}
+                            className={`h-20 rounded-xl border flex flex-col items-center justify-center transition-all ${
+                              !isAvail
+                                ? 'bg-slate-200/80 border-slate-200 text-slate-400 cursor-not-allowed'
+                                : isSelected
+                                ? 'bg-[#52B762] text-white border-[#52B762] ring-2 ring-emerald-400 shadow-xs'
+                                : 'bg-white border-slate-200 hover:bg-emerald-50 hover:border-emerald-300 text-slate-700'
+                            }`}
+                          >
+                            <span className="text-sm font-mono font-bold">{s.slot_id}</span>
+                            <span className="text-[10px] mt-1 font-medium">
+                              {s.status === 'AVAILABLE' ? 'ว่าง' : 'ไม่ว่าง'}
+                            </span>
+                          </button>
                         )
                       })}
                     </div>
-                  </div>
-                )
-              })
+                  )}
+                </div>
+
+              </div>
             )}
 
-            <div className="flex justify-between items-center bg-slate-50 p-4 rounded-2xl border border-slate-200 mt-4">
+            <div className="flex justify-between items-center bg-slate-50 p-4 rounded-2xl border border-slate-200 mt-6">
               <span className="text-xs font-medium text-slate-700">
                 ตำแหน่งที่เลือก: {selectedSlot ? <span className="font-bold text-[#52B762]">ชั้น {selectedSlot.floor_no} • โซน {selectedSlot.zone_code} (ช่อง {selectedSlot.slot_id})</span> : 'กรุณาเลือกช่องจอดว่าง'}
               </span>
@@ -642,128 +729,153 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* ส่วนที่ 3: จัดการช่องจอดแบบจัดกลุ่มเป็นบล็อกการ์ด (ชั้น -> โซน -> การ์ดช่องจอด) */}
+            {/* ส่วนที่ 3: หน้ารายการช่องจอดทั้งหมดของ Admin (กดชั้น -> กดโซน -> การ์ดช่องจอด) */}
             <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-6 pb-4 border-b border-slate-200">
                 <div>
-                  <h4 className="text-sm font-bold text-slate-800">รายการช่องจอดทั้งหมด (จัดกลุ่มแยกตามชั้นและโซน)</h4>
-                  <p className="text-xs text-slate-400">ติ๊กเลือกช่องจอดที่ต้องการเพื่อกดลบพร้อมกันหลายๆ ช่องได้</p>
+                  <h4 className="text-sm font-bold text-slate-800">รายการช่องจอดทั้งหมด (Admin Slot Management)</h4>
+                  <p className="text-xs text-slate-400">เลือกชั้นและโซนเพื่อจัดการ ลบ หรือสลับสถานะช่องจอด</p>
                 </div>
                 
-                <div className="flex items-center gap-3">
-                  <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer bg-slate-50 px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-100">
-                    <input
-                      type="checkbox"
-                      checked={slots.length > 0 && selectedSlotIds.length === slots.length}
-                      onChange={(e) => handleSelectAllGlobal(e.target.checked)}
-                      className="rounded border-slate-300 text-[#52B762] focus:ring-[#52B762]"
-                    />
-                    เลือกทั้งหมด ({slots.length})
-                  </label>
-
-                  {selectedSlotIds.length > 0 && (
-                    <button
-                      onClick={handleBulkDeleteSlots}
-                      className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl transition-all shadow-xs flex items-center gap-1.5"
-                    >
-                      <i className="fa-solid fa-trash-can"></i>
-                      ลบรายการที่เลือก ({selectedSlotIds.length})
-                    </button>
-                  )}
-                </div>
+                {selectedSlotIds.length > 0 && (
+                  <button
+                    onClick={handleBulkDeleteSlots}
+                    className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl transition-all shadow-xs flex items-center gap-1.5"
+                  >
+                    <i className="fa-solid fa-trash-can"></i>
+                    ลบรายการที่เลือก ({selectedSlotIds.length})
+                  </button>
+                )}
               </div>
 
               {uniqueFloors.length === 0 ? (
                 <div className="text-center py-8 text-xs text-slate-400">ยังไม่มีข้อมูลช่องจอดในระบบ</div>
               ) : (
-                uniqueFloors.map(floor => {
-                  const floorSlots = slots.filter(s => s.floor_no === floor)
-                  const uniqueZones = Array.from(new Set(floorSlots.map(s => s.zone_code))).sort()
+                <div className="space-y-6">
+                  
+                  {/* 1. ปุ่มเลือกชั้น (Admin) */}
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                    <span className="text-xs font-bold text-slate-700 block mb-2.5">
+                      <i className="fa-solid fa-layer-group text-[#52B762] mr-1.5"></i> 1. เลือกชั้นที่ต้องการจัดการ:
+                    </span>
+                    <div className="flex flex-wrap gap-2">
+                      {uniqueFloors.map(floor => (
+                        <button
+                          key={floor}
+                          onClick={() => setAdminManageFloor(floor)}
+                          className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                            adminManageFloor === floor
+                              ? 'bg-[#52B762] text-white shadow-xs'
+                              : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          ชั้น {floor}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
 
-                  return (
-                    <div key={floor} className="mb-6 bg-slate-50 p-5 rounded-2xl border border-slate-200">
-                      <h5 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
-                        <i className="fa-solid fa-layer-group text-[#52B762]"></i> ชั้น {floor}
-                      </h5>
+                  {/* 2. ปุ่มเลือกโซน (Admin) */}
+                  {adminAvailableZones.length > 0 && (
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                      <span className="text-xs font-bold text-slate-700 block mb-2.5">
+                        <i className="fa-solid fa-grip text-[#52B762] mr-1.5"></i> 2. เลือกโซนในชั้น {adminManageFloor}:
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {adminAvailableZones.map(zone => (
+                          <button
+                            key={zone}
+                            onClick={() => setAdminManageZone(zone)}
+                            className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${
+                              adminManageZone === zone
+                                ? 'bg-slate-800 text-white shadow-xs'
+                                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            โซน {zone} (Zone {zone})
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
-                      <div className="space-y-4">
-                        {uniqueZones.map(zone => {
-                          const zoneSlots = floorSlots.filter(s => s.zone_code === zone)
-                          const isAllZoneSelected = zoneSlots.length > 0 && zoneSlots.every(s => selectedSlotIds.includes(s.slot_id))
+                  {/* 3. ตารางจัดการช่องจอดตาม ชั้น + โซน */}
+                  <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                    <div className="flex justify-between items-center mb-4 pb-2 border-b border-slate-200">
+                      <span className="text-xs font-bold text-slate-700">
+                        3. รายการช่องจอดใน <span className="text-[#52B762]">ชั้น {adminManageFloor} • โซน {adminManageZone}</span> ({filteredAdminSlots.length} ช่อง)
+                      </span>
 
+                      {filteredAdminSlots.length > 0 && (
+                        <label className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 cursor-pointer bg-white px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-100">
+                          <input
+                            type="checkbox"
+                            checked={
+                              filteredAdminSlots.length > 0 &&
+                              filteredAdminSlots.every(s => selectedSlotIds.includes(s.slot_id))
+                            }
+                            onChange={(e) => handleSelectAllInCurrentZone(filteredAdminSlots, e.target.checked)}
+                            className="rounded border-slate-300 text-[#52B762] focus:ring-[#52B762]"
+                          />
+                          เลือกโซน {adminManageZone} ทั้งหมด
+                        </label>
+                      )}
+                    </div>
+
+                    {filteredAdminSlots.length === 0 ? (
+                      <div className="text-center py-8 text-xs text-slate-400">ไม่พบช่องจอดในโซนนี้</div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                        {filteredAdminSlots.map(s => {
+                          const isChecked = selectedSlotIds.includes(s.slot_id)
                           return (
-                            <div key={zone} className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-                              <div className="flex justify-between items-center mb-3 pb-2 border-b border-slate-100">
-                                <span className="text-xs font-bold text-slate-700 flex items-center gap-2">
-                                  <span className="w-2.5 h-2.5 rounded-full bg-[#52B762]"></span>
-                                  โซน {zone} (Zone {zone})
-                                </span>
-                                
-                                <label className="flex items-center gap-1.5 text-[11px] text-slate-500 cursor-pointer hover:text-slate-800">
-                                  <input
-                                    type="checkbox"
-                                    checked={isAllZoneSelected}
-                                    onChange={(e) => handleSelectAllInZone(zoneSlots, e.target.checked)}
-                                    className="rounded border-slate-300 text-[#52B762] focus:ring-[#52B762]"
-                                  />
-                                  เลือกโซน {zone} ทั้งหมด ({zoneSlots.length})
-                                </label>
+                            <div
+                              key={s.slot_id}
+                              className={`p-3 rounded-xl border flex items-center justify-between transition-all ${
+                                isChecked
+                                  ? 'bg-rose-50/70 border-rose-300 ring-1 ring-rose-200'
+                                  : 'bg-white border-slate-200 hover:border-slate-300 shadow-2xs'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5">
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => handleToggleSelectSlot(s.slot_id)}
+                                  className="rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                                />
+                                <div>
+                                  <span className="text-xs font-mono font-bold text-slate-800 block">{s.slot_id}</span>
+                                  <span className={`text-[10px] font-semibold ${
+                                    s.status === 'AVAILABLE' ? 'text-emerald-600' : 'text-rose-600'
+                                  }`}>
+                                    {s.status === 'AVAILABLE' ? 'ว่าง' : 'ไม่ว่าง'}
+                                  </span>
+                                </div>
                               </div>
 
-                              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                                {zoneSlots.map(s => {
-                                  const isChecked = selectedSlotIds.includes(s.slot_id)
-                                  return (
-                                    <div
-                                      key={s.slot_id}
-                                      className={`p-3 rounded-xl border flex items-center justify-between transition-all ${
-                                        isChecked
-                                          ? 'bg-rose-50/70 border-rose-300 ring-1 ring-rose-200'
-                                          : 'bg-slate-50 border-slate-200 hover:border-slate-300'
-                                      }`}
-                                    >
-                                      <div className="flex items-center gap-2.5">
-                                        <input
-                                          type="checkbox"
-                                          checked={isChecked}
-                                          onChange={() => handleToggleSelectSlot(s.slot_id)}
-                                          className="rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
-                                        />
-                                        <div>
-                                          <span className="text-xs font-mono font-bold text-slate-800 block">{s.slot_id}</span>
-                                          <span className={`text-[10px] font-semibold ${
-                                            s.status === 'AVAILABLE' ? 'text-emerald-600' : 'text-rose-600'
-                                          }`}>
-                                            {s.status === 'AVAILABLE' ? 'ว่าง' : 'ไม่ว่าง'}
-                                          </span>
-                                        </div>
-                                      </div>
-
-                                      <div className="flex items-center gap-1">
-                                        <button
-                                          onClick={() => handleToggleSlotStatus(s.slot_id, s.status)}
-                                          className="px-2 py-1 bg-white border border-slate-200 hover:bg-slate-100 rounded-lg text-[10px] font-medium text-slate-600"
-                                        >
-                                          สลับ
-                                        </button>
-                                        <button
-                                          onClick={() => handleDeleteSlot(s.slot_id)}
-                                          className="px-2 py-1 bg-rose-100 text-rose-700 hover:bg-rose-200 rounded-lg text-[10px] font-medium"
-                                        >
-                                          ลบ
-                                        </button>
-                                      </div>
-                                    </div>
-                                  )
-                                })}
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => handleToggleSlotStatus(s.slot_id, s.status)}
+                                  className="px-2 py-1 bg-slate-100 border border-slate-200 hover:bg-slate-200 rounded-lg text-[10px] font-medium text-slate-600"
+                                >
+                                  สลับ
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteSlot(s.slot_id)}
+                                  className="px-2 py-1 bg-rose-100 text-rose-700 hover:bg-rose-200 rounded-lg text-[10px] font-medium"
+                                >
+                                  ลบ
+                                </button>
                               </div>
                             </div>
                           )
                         })}
                       </div>
-                    </div>
-                  )
-                })
+                    )}
+                  </div>
+
+                </div>
               )}
             </div>
 
