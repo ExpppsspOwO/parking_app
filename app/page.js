@@ -20,27 +20,26 @@ export default function HomePage() {
   const [calculatedPrice, setCalculatedPrice] = useState(0)
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false)
 
-  // Ticket Status & Remaining Time State
+  // Ticket Status State
   const [searchPlate, setSearchPlate] = useState('')
   const [activeTicket, setActiveTicket] = useState(null)
   const [remainingTimeText, setRemainingTimeText] = useState('')
 
-  // Admin States - Bulk Create
+  // Admin Bulk Create State
   const [adminFloor, setAdminFloor] = useState('1')
   const [adminZone, setAdminZone] = useState('A')
   const [bulkCount, setBulkCount] = useState(10)
 
-  // Admin States - Pricing Rate Form
+  // Admin Pricing State
   const [inputFirstRate, setInputFirstRate] = useState(20)
   const [inputNextRate, setInputNextRate] = useState(20)
   const [inputFineRate, setInputFineRate] = useState(50)
   const [isUpdatingRate, setIsUpdatingRate] = useState(false)
 
-  // Admin States - Bulk Select & Delete
+  // Admin Checkbox Select State (สำหรับลบหลายช่องพร้อมกัน)
   const [selectedSlotIds, setSelectedSlotIds] = useState([])
 
   useEffect(() => {
-    // โหลด Session ผู้ใช้
     const userStr = localStorage.getItem('currentUser')
     if (userStr) {
       const u = JSON.parse(userStr)
@@ -52,7 +51,7 @@ export default function HomePage() {
     fetchPricingRate()
   }, [])
 
-  // คำนวณราคาค่าจอดล่วงหน้า
+  // คำนวณราคาตามชั่วโมง
   useEffect(() => {
     if (hoursToPark <= 1) {
       setCalculatedPrice(Number(rate.first_hour_rate || 20))
@@ -63,7 +62,7 @@ export default function HomePage() {
     }
   }, [hoursToPark, rate])
 
-  // นับเวลาถอยหลัง Real-time สำหรับสถานะการจอง
+  // นับเวลาถอยหลัง Real-time
   useEffect(() => {
     if (!activeTicket || !activeTicket.expected_exit) return
 
@@ -85,7 +84,7 @@ export default function HomePage() {
     return () => clearInterval(timer)
   }, [activeTicket])
 
-  // ดึงข้อมูลช่องจอด + เรียงลำดับตัวเลขแบบธรรมชาติ Natural Sort (A1, A2, ..., A10)
+  // ดึงข้อมูลช่องจอด + Natural Sort (A1, A2, ..., A10)
   const fetchSlots = async () => {
     const { data, error } = await supabase.from('parking_slots').select('*')
     if (data) {
@@ -97,7 +96,7 @@ export default function HomePage() {
     if (error) console.error('Error fetching slots:', error)
   }
 
-  // ดึงเรทราคาค่าบริการ
+  // ดึงเรทราคา
   const fetchPricingRate = async () => {
     const { data } = await supabase.from('pricing_rates').select('*').limit(1).single()
     if (data) {
@@ -108,7 +107,7 @@ export default function HomePage() {
     }
   }
 
-  // Admin: อัปเดตอัตราค่าบริการและค่าปรับ
+  // อัปเดตราคา
   const handleUpdatePricing = async (e) => {
     e.preventDefault()
     setIsUpdatingRate(true)
@@ -176,7 +175,7 @@ export default function HomePage() {
     setLicensePlate('')
   }
 
-  // ค้นหาตั๋วด้วยป้ายทะเบียน
+  // ค้นหาตั๋ว
   const handleSearchTicket = async (plateToSearch) => {
     const query = plateToSearch || searchPlate
     if (!query) return
@@ -197,7 +196,7 @@ export default function HomePage() {
     }
   }
 
-  // Admin: สร้างช่องจอดอัตโนมัติตามจำนวน (เช่น A1 - A10)
+  // สร้างช่องจอดรวดเดียว
   const handleBulkCreateSlots = async () => {
     if (!adminFloor || !adminZone || !bulkCount || bulkCount <= 0) {
       alert('กรุณากรอกข้อมูล ชั้น โซน และจำนวนช่องจอดให้ครบถ้วน')
@@ -228,14 +227,14 @@ export default function HomePage() {
     }
   }
 
-  // Admin: สลับสถานะช่องจอด
+  // สลับสถานะช่องจอด
   const handleToggleSlotStatus = async (slotId, currentStatus) => {
     const nextStatus = currentStatus === 'AVAILABLE' ? 'UNAVAILABLE' : 'AVAILABLE'
     await supabase.from('parking_slots').update({ status: nextStatus }).eq('slot_id', slotId)
     fetchSlots()
   }
 
-  // Admin: ลบช่องจอดเดี่ยว
+  // ลบช่องจอดเดี่ยว
   const handleDeleteSlot = async (slotId) => {
     if (confirm(`คุณต้องการลบช่องจอด ${slotId} ออกจากระบบใช่หรือไม่?`)) {
       await supabase.from('parking_slots').delete().eq('slot_id', slotId)
@@ -244,14 +243,14 @@ export default function HomePage() {
     }
   }
 
-  // Admin: เลือก/ยกเลิก เลือกช่องจอดเดี่ยว
+  // ติ๊กเลือก/ยกเลิก ช่องจอดเดี่ยว
   const handleToggleSelectSlot = (slotId) => {
     setSelectedSlotIds(prev =>
       prev.includes(slotId) ? prev.filter(id => id !== slotId) : [...prev, slotId]
     )
   }
 
-  // Admin: เลือกทั้งหมดในโซน
+  // ติ๊กเลือกทั้งหมดในโซน
   const handleSelectAllInZone = (zoneSlots, isChecked) => {
     const zoneSlotIds = zoneSlots.map(s => s.slot_id)
     if (isChecked) {
@@ -261,7 +260,7 @@ export default function HomePage() {
     }
   }
 
-  // Admin: เลือกทั้งหมดในระบบ
+  // ติ๊กเลือกทั้งหมดในระบบ
   const handleSelectAllGlobal = (isChecked) => {
     if (isChecked) {
       setSelectedSlotIds(slots.map(s => s.slot_id))
@@ -270,7 +269,7 @@ export default function HomePage() {
     }
   }
 
-  // Admin: ลบรายการที่เลือกหลายๆ ช่องพร้อมกัน (Bulk Delete)
+  // ลบช่องจอดที่เลือกแบบกลุ่ม (Bulk Delete)
   const handleBulkDeleteSlots = async () => {
     if (selectedSlotIds.length === 0) return
     if (confirm(`ยืนยันการลบช่องจอดที่เลือกจำนวน ${selectedSlotIds.length} รายการใช่หรือไม่?`)) {
@@ -320,7 +319,7 @@ export default function HomePage() {
               <span className="text-xs font-medium bg-slate-100 px-3 py-1.5 rounded-xl border">
                 👤 {currentUser.username} ({currentUser.role})
               </span>
-              <button onClick={handleLogout} className="text-xs text-rose-500 hover:underline">
+              <button onClick={handleLogout} className="text-xs text-rose-500 hover:underline font-medium">
                 ออกจากระบบ
               </button>
             </div>
@@ -364,7 +363,7 @@ export default function HomePage() {
 
       <main className="w-full max-w-6xl">
         
-        {/* ==================== TAB 1: จองที่จอดรถ (จัดกลุ่ม ชั้น -> โซน) ==================== */}
+        {/* ==================== TAB 1: จองที่จอดรถ (ผู้ใช้งาน) ==================== */}
         {activeTab === 'booking' && (
           <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs">
             <div className="flex justify-between items-center mb-6 border-b pb-4">
@@ -379,7 +378,6 @@ export default function HomePage() {
               </span>
             </div>
 
-            {/* วนลูปแยกตามชั้น */}
             {uniqueFloors.length === 0 ? (
               <div className="text-center py-12 text-xs text-slate-400">ยังไม่มีข้อมูลช่องจอดในระบบ (ให้ Admin เพิ่มช่องจอดก่อน)</div>
             ) : (
@@ -641,12 +639,12 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* ส่วนที่ 3: จัดการช่องจอดแบบจัดกลุ่ม ชั้น -> โซน พร้อมติ๊กลบทีละหลายช่อง (Bulk Delete) */}
+            {/* ส่วนที่ 3: จัดการช่องจอดแบบจัดกลุ่มเป็นบล็อกการ์ด (ชั้น -> โซน -> การ์ดช่องจอด) */}
             <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-6 pb-4 border-b border-slate-200">
                 <div>
-                  <h4 className="text-sm font-bold text-slate-800">รายการช่องจอดทั้งหมดในระบบ (จัดกลุ่มตามชั้นและโซน)</h4>
-                  <p className="text-xs text-slate-400">สามารถติ๊กเลือกช่องจอดเพื่อลบพร้อมกันทีเดียวหลายๆ ช่องได้</p>
+                  <h4 className="text-sm font-bold text-slate-800">รายการช่องจอดทั้งหมด (จัดกลุ่มแยกตามชั้นและโซน)</h4>
+                  <p className="text-xs text-slate-400">ติ๊กเลือกช่องจอดที่ต้องการเพื่อกดลบพร้อมกันหลายๆ ช่องได้</p>
                 </div>
                 
                 <div className="flex items-center gap-3">
@@ -680,11 +678,13 @@ export default function HomePage() {
                   const uniqueZones = Array.from(new Set(floorSlots.map(s => s.zone_code))).sort()
 
                   return (
+                    /* การ์ดครอบประจำชั้น */
                     <div key={floor} className="mb-6 bg-slate-50 p-5 rounded-2xl border border-slate-200">
-                      <h5 className="text-xs font-bold text-slate-800 mb-3 flex items-center gap-2">
+                      <h5 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
                         <i className="fa-solid fa-layer-group text-[#52B762]"></i> ชั้น {floor}
                       </h5>
 
+                      {/* การ์ดครอบประจำโซน */}
                       <div className="space-y-4">
                         {uniqueZones.map(zone => {
                           const zoneSlots = floorSlots.filter(s => s.zone_code === zone)
@@ -709,6 +709,7 @@ export default function HomePage() {
                                 </label>
                               </div>
 
+                              {/* แสดงช่องจอดภายในโซนเป็น Grid การ์ดเล็กๆ */}
                               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                                 {zoneSlots.map(s => {
                                   const isChecked = selectedSlotIds.includes(s.slot_id)
@@ -771,7 +772,7 @@ export default function HomePage() {
 
       </main>
 
-      {/* ==================== MODAL ยืนยันการจอง + รูป QR CODE ==================== */}
+      {/* MODAL ยืนยันการจอง + รูป QR CODE */}
       {isBookingModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <div className="bg-white border border-slate-200 w-full max-w-sm rounded-3xl p-6 shadow-xl">
