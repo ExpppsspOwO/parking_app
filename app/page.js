@@ -2,7 +2,6 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../lib/supabaseClient'
-import { QRCodeSVG } from 'qrcode.react'
 
 export default function HomePage() {
   const router = useRouter()
@@ -218,7 +217,7 @@ export default function HomePage() {
             activeTab === 'ticket' ? 'bg-[#52B762] text-white border-[#52B762]' : 'bg-white text-slate-600'
           }`}
         >
-          <i className="fa-solid fa-qrcode mr-2"></i> ค้นหาตั๋ว / QR Token
+          <i className="fa-solid fa-receipt mr-2"></i> ค้นหาตั๋ว / สถานะ
         </button>
         {currentUser?.role === 'ADMIN' && (
           <button
@@ -288,7 +287,7 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* TAB 2: TICKET SEARCH & QR */}
+        {/* TAB 2: TICKET SEARCH (NO QR CODE) */}
         {activeTab === 'ticket' && (
           <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs max-w-xl mx-auto">
             <h2 className="text-base font-semibold mb-2">ค้นหาตั๋วด้วยป้ายทะเบียน</h2>
@@ -306,20 +305,32 @@ export default function HomePage() {
             </div>
 
             {ticketResult && (
-              <div className="bg-slate-50 border rounded-2xl p-6 text-center">
-                <span className="text-xs text-slate-400 block mb-1">บัตรจองที่จอดรถ</span>
-                <h3 className="text-lg font-bold text-slate-800 mb-2">{ticketResult.license_plate}</h3>
-                <div className="text-xs text-slate-600 mb-4 space-y-1">
-                  <p>ช่องจอด: <strong className="text-[#52B762]">{ticketResult.slot_id}</strong></p>
-                  <p>ยอดชำระสุทธิ: <strong>{ticketResult.grand_total} บาท</strong></p>
-                  <p>รหัสตั๋ว: <span className="font-mono">{ticketResult.ticket_id}</span></p>
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 text-center shadow-xs">
+                <span className="text-xs text-slate-400 block mb-1">บัตรยืนยันการจองที่จอดรถ</span>
+                <h3 className="text-2xl font-bold text-slate-800 mb-4 tracking-wide">{ticketResult.license_plate}</h3>
+                
+                <div className="bg-white p-4 rounded-xl border border-slate-200 text-xs text-slate-700 space-y-2 mb-4 text-left">
+                  <div className="flex justify-between border-b pb-2">
+                    <span className="text-slate-400">ตำแหน่งช่องจอด:</span>
+                    <span className="font-bold text-[#52B762] text-sm">{ticketResult.slot_id}</span>
+                  </div>
+                  <div className="flex justify-between border-b pb-2">
+                    <span className="text-slate-400">ยอดชำระสุทธิ:</span>
+                    <span className="font-semibold text-slate-800">{ticketResult.grand_total} บาท</span>
+                  </div>
+                  <div className="flex justify-between border-b pb-2">
+                    <span className="text-slate-400">เวลาที่บันทึกเข้า:</span>
+                    <span className="font-medium text-slate-700">{new Date(ticketResult.entry_time).toLocaleString('th-TH')}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">รหัสบัตรจอง (Ticket ID):</span>
+                    <span className="font-mono font-semibold text-slate-800">{ticketResult.ticket_id}</span>
+                  </div>
                 </div>
 
-                {/* QR TOKEN COMPONENT */}
-                <div className="bg-white p-4 inline-block rounded-xl border shadow-xs">
-                  <QRCodeSVG value={ticketResult.ticket_id} size={150} />
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-3 text-xs font-medium">
+                  ✓ ยืนยันข้อมูลการจองเรียบร้อย สามารถนำป้ายทะเบียนหรือรหัสบัตรแจ้งเจ้าหน้าที่ได้ทันที
                 </div>
-                <p className="text-[10px] text-slate-400 mt-2">สแกน QR Token นี้ที่ตู้ตรวจสถานะ</p>
               </div>
             )}
           </div>
