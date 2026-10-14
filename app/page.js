@@ -36,7 +36,7 @@ export default function HomePage() {
   const [inputFineRate, setInputFineRate] = useState(50)
   const [isUpdatingRate, setIsUpdatingRate] = useState(false)
 
-  // Admin Checkbox Select State (สำหรับลบหลายช่องพร้อมกัน)
+  // Admin Checkbox Select State
   const [selectedSlotIds, setSelectedSlotIds] = useState([])
 
   useEffect(() => {
@@ -84,7 +84,7 @@ export default function HomePage() {
     return () => clearInterval(timer)
   }, [activeTicket])
 
-  // ดึงข้อมูลช่องจอด + Natural Sort (A1, A2, ..., A10)
+  // ดึงข้อมูลช่องจอด + Natural Sort
   const fetchSlots = async () => {
     const { data, error } = await supabase.from('parking_slots').select('*')
     if (data) {
@@ -196,7 +196,7 @@ export default function HomePage() {
     }
   }
 
-  // สร้างช่องจอดรวดเดียว
+  // สร้างช่องจอดรวดเดียว (ใส่เลขชั้นนำหน้า เช่น 1A1, 1A2... เพื่อไม่ให้ slot_id ซ้ำกันข้ามชั้น)
   const handleBulkCreateSlots = async () => {
     if (!adminFloor || !adminZone || !bulkCount || bulkCount <= 0) {
       alert('กรุณากรอกข้อมูล ชั้น โซน และจำนวนช่องจอดให้ครบถ้วน')
@@ -204,12 +204,15 @@ export default function HomePage() {
     }
 
     const newSlots = []
+    const floor = adminFloor.trim()
     const prefix = adminZone.trim().toUpperCase()
 
     for (let i = 1; i <= parseInt(bulkCount); i++) {
+      // สร้าง slot_id มีชั้นนำหน้า เช่น ชั้น 1 โซน A -> 1A1, 1A2 ...
+      const uniqueSlotId = `${floor}${prefix}${i}`
       newSlots.push({
-        slot_id: `${prefix}${i}`,
-        floor_no: adminFloor.trim(),
+        slot_id: uniqueSlotId,
+        floor_no: floor,
         zone_code: prefix,
         status: 'AVAILABLE'
       })
@@ -222,7 +225,7 @@ export default function HomePage() {
     if (error) {
       alert('เกิดข้อผิดพลาด: ' + error.message)
     } else {
-      alert(`สร้างช่องจอด ${prefix}1 ถึง ${prefix}${bulkCount} บนชั้น ${adminFloor} เรียบร้อยแล้ว!`)
+      alert(`สร้างช่องจอด ${floor}${prefix}1 ถึง ${floor}${prefix}${bulkCount} บนชั้น ${floor} เรียบร้อยแล้ว!`)
       fetchSlots()
     }
   }
@@ -243,14 +246,14 @@ export default function HomePage() {
     }
   }
 
-  // ติ๊กเลือก/ยกเลิก ช่องจอดเดี่ยว
+  // เลือก/ยกเลิก เลือกช่องจอดเดี่ยว
   const handleToggleSelectSlot = (slotId) => {
     setSelectedSlotIds(prev =>
       prev.includes(slotId) ? prev.filter(id => id !== slotId) : [...prev, slotId]
     )
   }
 
-  // ติ๊กเลือกทั้งหมดในโซน
+  // เลือกทั้งหมดในโซน
   const handleSelectAllInZone = (zoneSlots, isChecked) => {
     const zoneSlotIds = zoneSlots.map(s => s.slot_id)
     if (isChecked) {
@@ -260,7 +263,7 @@ export default function HomePage() {
     }
   }
 
-  // ติ๊กเลือกทั้งหมดในระบบ
+  // เลือกทั้งหมดในระบบ
   const handleSelectAllGlobal = (isChecked) => {
     if (isChecked) {
       setSelectedSlotIds(slots.map(s => s.slot_id))
@@ -590,7 +593,7 @@ export default function HomePage() {
             {/* ส่วนที่ 2: เครื่องมือสร้างช่องจอดแบบชุดรวดเดียว (Bulk Generation) */}
             <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
               <h3 className="text-sm font-bold text-slate-800 mb-1">จัดการชั้น/โซน และเพิ่มช่องจอดอัตโนมัติ</h3>
-              <p className="text-xs text-slate-400 mb-4">ระบุชั้น โซน และจำนวน เช่น ระบุโซน A และ 10 ช่อง ระบบจะสร้าง A1 - A10 ให้ทันที</p>
+              <p className="text-xs text-slate-400 mb-4">ระบุชั้น โซน และจำนวน เช่น ชั้น 1 โซน A จำนวน 10 ช่อง ระบบจะสร้าง 1A1 - 1A10 ให้ทันที</p>
 
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <div>
@@ -678,13 +681,11 @@ export default function HomePage() {
                   const uniqueZones = Array.from(new Set(floorSlots.map(s => s.zone_code))).sort()
 
                   return (
-                    /* การ์ดครอบประจำชั้น */
                     <div key={floor} className="mb-6 bg-slate-50 p-5 rounded-2xl border border-slate-200">
                       <h5 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
                         <i className="fa-solid fa-layer-group text-[#52B762]"></i> ชั้น {floor}
                       </h5>
 
-                      {/* การ์ดครอบประจำโซน */}
                       <div className="space-y-4">
                         {uniqueZones.map(zone => {
                           const zoneSlots = floorSlots.filter(s => s.zone_code === zone)
@@ -709,7 +710,6 @@ export default function HomePage() {
                                 </label>
                               </div>
 
-                              {/* แสดงช่องจอดภายในโซนเป็น Grid การ์ดเล็กๆ */}
                               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                                 {zoneSlots.map(s => {
                                   const isChecked = selectedSlotIds.includes(s.slot_id)
