@@ -85,7 +85,7 @@ export default function HomePage() {
   }, [activeTab, currentUser])
 
   const uniqueFloors = Array.from(new Set(slots.map(s => s.floor_no))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-  
+
   const bookingAvailableZones = Array.from(
     new Set(slots.filter(s => s.floor_no === bookingFloor).map(s => s.zone_code))
   ).sort()
@@ -245,47 +245,62 @@ export default function HomePage() {
 
     setActiveTab('status')
     fetchUserTickets(cleanPlate)
-    
+
     setSelectedSlot(null)
     setLicensePlate('')
   }
 
+  // 🚗 ฟังก์ชันให้ผู้ใช้กดนำรถออก / คืนช่องจอด (แก้ไขเรื่อง Timezone)
   const handleCheckOutSlot = (ticket) => {
     showConfirm(
       `คุณต้องการนำรถออกจากช่อง ${ticket.slot_id} และคืนช่องจอดใช่หรือไม่?`,
       'ยืนยันการคืนช่องจอด',
       async () => {
         const now = new Date()
-        const expectedExit = new Date(ticket.expected_exit)
+        
+        // 🔥 แก้ไขการอ่านเวลาจาก DB ให้เป็น UTC ที่ถูกต้องโดยเติม 'Z' ต่อท้ายถ้าไม่มี
+        const exitStr = ticket.expected_exit.endsWith('Z') ? ticket.expected_exit : ticket.expected_exit + 'Z'
+        const expectedExit = new Date(exitStr)
+        
         let fineInfoText = ''
 
-        // คำนวณค่าปรับกรณีจอดเกินเวลา
+        // 1. บันทึกเวลาออกจริง (actual_exit) ลงในตั๋วใบนี้เพื่อปิดสถานะการจอง
+        const { error: updateTxError } = await supabase
+          .from('parking_transactions')
+          .update({ actual_exit: now.toISOString() })
+          .eq('ticket_id', ticket.ticket_id)
+
+        if (updateTxError) {
+          showAlert('เกิดข้อผิดพลาดในการอัปเดตตั๋ว: ' + updateTxError.message, 'เกิดข้อผิดพลาด', 'error')
+          return
+        }
+
+        // 2. คำนวณค่าปรับกรณีจอดเกินเวลาจริง
         if (now > expectedExit) {
           const diffMs = now.getTime() - expectedExit.getTime()
           const diffHours = Math.ceil(diffMs / (1000 * 60 * 60))
           const fineRate = rate?.fine_rate || 50
           const totalFine = diffHours * fineRate
 
-          // 🔥 เพิ่ม reported_by_user เพื่อไม่ให้ค่าในฐานข้อมูลเป็น NULL
           await supabase.from('fines').insert([{
             ticket_id: ticket.ticket_id,
             fine_type_id: 1, // 1 = จอดรถเกินเวลา
-            reported_by_user: currentUser?.user_id || ticket.user_id, // ใส่ ID ผู้ใช้งานที่ล็อกอินอยู่
+            reported_by_user: currentUser?.user_id || ticket.user_id,
             fine_amount: totalFine,
             reported_at: now.toISOString()
           }])
 
-          fineInfoText = ` (เกินเวลาจอดไป ${diffHours} ชม. มีค่าปรับ ${totalFine} บาท บันทึกลงตาราง fines เรียบร้อย)`
+          fineInfoText = ` (เกินเวลาจอดไป ${diffHours} ชม. มีค่าปรับ ${totalFine} บาท)`
         }
 
-        // คืนสถานะช่องจอดเป็น AVAILABLE
-        const { error } = await supabase
+        // 3. คืนสถานะช่องจอดเป็น AVAILABLE ให้คนอื่นจองต่อได้
+        const { error: updateSlotError } = await supabase
           .from('parking_slots')
           .update({ status: 'AVAILABLE' })
           .eq('slot_id', ticket.slot_id)
 
-        if (error) {
-          showAlert('เกิดข้อผิดพลาดในการคืนช่องจอด: ' + error.message, 'เกิดข้อผิดพลาด', 'error')
+        if (updateSlotError) {
+          showAlert('เกิดข้อผิดพลาดในการคืนช่องจอด: ' + updateSlotError.message, 'เกิดข้อผิดพลาด', 'error')
         } else {
           showAlert(`นำรถออกจากช่อง ${ticket.slot_id} และคืนช่องจอดเรียบร้อยแล้ว!${fineInfoText}`, 'คืนช่องจอดสำเร็จ', 'success')
           fetchSlots()
@@ -293,7 +308,7 @@ export default function HomePage() {
         }
       }
     )
-  }
+  } 
 
   // 🐛 แก้ไขบัค: ใช้ ignoreDuplicates: true เพื่อข้ามช่องจอดที่มีอยู่แล้ว และไม่รีเซ็ตสถานะเดิมให้เป็น AVAILABLE
   const handleBulkCreateSlots = async () => {
@@ -361,9 +376,9 @@ export default function HomePage() {
   const handleBulkUpdateStatus = (newStatus) => {
     if (selectedSlotIds.length === 0) return
 
-    const statusLabel = 
-      newStatus === 'AVAILABLE' ? 'ว่าง' : 
-      newStatus === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
+    const statusLabel =
+      newStatus === 'AVAILABLE' ? 'ว่าง' :
+        newStatus === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
 
     showConfirm(
       `คุณต้องการเปลี่ยนสถานะช่องจอดที่เลือกจำนวน ${selectedSlotIds.length} รายการ เป็น "${statusLabel}" ใช่หรือไม่?`,
@@ -460,26 +475,23 @@ export default function HomePage() {
       <div className="w-full max-w-6xl flex gap-2 mb-6">
         <button
           onClick={() => setActiveTab('booking')}
-          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${
-            activeTab === 'booking' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
-          }`}
+          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${activeTab === 'booking' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
+            }`}
         >
           <i className="fa-solid fa-car mr-2"></i> เลือกช่องจอดรถ (Real-time)
         </button>
         <button
           onClick={() => setActiveTab('status')}
-          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${
-            activeTab === 'status' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
-          }`}
+          className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${activeTab === 'status' ? 'bg-[#52B762] text-white border-[#52B762] shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
+            }`}
         >
           <i className="fa-solid fa-clock mr-2"></i> ตรวจสอบสถานะการจอง
         </button>
         {currentUser?.role === 'ADMIN' && (
           <button
             onClick={() => setActiveTab('admin')}
-            className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${
-              activeTab === 'admin' ? 'bg-slate-800 text-white border-slate-800 shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
-            }`}
+            className={`flex-1 py-3 text-xs font-semibold rounded-xl border transition-all ${activeTab === 'admin' ? 'bg-slate-800 text-white border-slate-800 shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-50'
+              }`}
           >
             <i className="fa-solid fa-sliders mr-2"></i> แผงควบคุม Admin
           </button>
@@ -521,8 +533,8 @@ export default function HomePage() {
                 placeholder="ค้นหาเฉพาะป้ายทะเบียนของคุณ..."
                 className="flex-1 bg-slate-50 border border-slate-200 h-11 rounded-xl px-4 text-xs font-medium uppercase focus:outline-none focus:border-[#52B762]"
               />
-              <button 
-                onClick={() => fetchUserTickets(searchPlate)} 
+              <button
+                onClick={() => fetchUserTickets(searchPlate)}
                 className="px-6 bg-[#52B762] hover:bg-[#439E51] text-white text-xs font-semibold rounded-xl transition-all shadow-xs"
               >
                 ค้นหา
@@ -538,9 +550,10 @@ export default function HomePage() {
                 <span className="text-xs font-bold text-slate-600 block">
                   พบรายการจองทั้งหมดของคุณ {userTickets.length} รายการ:
                 </span>
-                
+
                 {userTickets.map((ticket) => {
-                  const isOccupied = ticket.parking_slots?.status === 'OCCUPIED'
+                  // ตรวจสอบว่าตั๋วใบนี้ยังจอดอยู่หรือไม่ (ต้องยังไม่มี actual_exit)
+                  const isCurrentlyParked = !ticket.actual_exit
 
                   return (
                     <div key={ticket.ticket_id} className="bg-slate-50 border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
@@ -551,13 +564,12 @@ export default function HomePage() {
                             {ticket.license_plate || 'ไม่ระบุป้ายทะเบียน'}
                           </h3>
                         </div>
-                        
-                        <span className={`text-xs font-semibold px-3 py-1 rounded-full border ${
-                          isOccupied 
-                            ? 'bg-emerald-100 text-emerald-800 border-emerald-200' 
+
+                        <span className={`text-xs font-semibold px-3 py-1 rounded-full border ${isCurrentlyParked
+                            ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
                             : 'bg-slate-200 text-slate-600 border-slate-300'
-                        }`}>
-                          {isOccupied ? '✓ กำลังจอดอยู่' : 'คืนช่องจอดแล้ว'}
+                          }`}>
+                          {isCurrentlyParked ? '✓ กำลังจอดอยู่' : 'คืนช่องจอดแล้ว'}
                         </span>
                       </div>
 
@@ -573,16 +585,23 @@ export default function HomePage() {
                           <span className="font-medium">{new Date(ticket.entry_time).toLocaleString('th-TH')}</span>
                         </div>
                         <div className="flex justify-between border-b pb-2">
-                          <span className="text-slate-400">เวลาสิ้นสุด:</span>
+                          <span className="text-slate-400">เวลาสิ้นสุด (คาดการณ์):</span>
                           <span className="font-medium">{new Date(ticket.expected_exit).toLocaleString('th-TH')}</span>
                         </div>
+                        {ticket.actual_exit && (
+                          <div className="flex justify-between border-b pb-2 text-slate-500">
+                            <span className="text-slate-400">เวลาที่ออกจริง:</span>
+                            <span className="font-medium">{new Date(ticket.actual_exit).toLocaleString('th-TH')}</span>
+                          </div>
+                        )}
                         <div className="flex justify-between">
                           <span className="text-slate-400">ยอดชำระแล้ว:</span>
                           <span className="font-bold text-slate-900">{ticket.prepaid_amount} บาท</span>
                         </div>
                       </div>
 
-                      {isOccupied && (
+                      {/* แสดงปุ่มคืนช่องจอด เฉพาะตั๋วที่ยังจอดอยู่เท่านั้น */}
+                      {isCurrentlyParked && (
                         <button
                           onClick={() => handleCheckOutSlot(ticket)}
                           className="w-full py-2.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold rounded-xl transition-all shadow-xs flex items-center justify-center gap-2 mt-2"
@@ -740,7 +759,7 @@ export default function HomePage() {
                     <span className="text-[11px] font-bold text-slate-700 px-2">
                       เลือกอยู่ {selectedSlotIds.length} รายการ:
                     </span>
-                    
+
                     <button
                       onClick={() => handleBulkUpdateStatus('AVAILABLE')}
                       className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold rounded-lg transition-all shadow-2xs flex items-center gap-1"
@@ -785,11 +804,10 @@ export default function HomePage() {
                         <button
                           key={floor}
                           onClick={() => setAdminManageFloor(floor)}
-                          className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
-                            adminManageFloor === floor
+                          className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${adminManageFloor === floor
                               ? 'bg-[#52B762] text-white shadow-xs'
                               : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                          }`}
+                            }`}
                         >
                           ชั้น {floor}
                         </button>
@@ -807,11 +825,10 @@ export default function HomePage() {
                           <button
                             key={zone}
                             onClick={() => setAdminManageZone(zone)}
-                            className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${
-                              adminManageZone === zone
+                            className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${adminManageZone === zone
                                 ? 'bg-slate-800 text-white shadow-xs'
                                 : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                            }`}
+                              }`}
                           >
                             โซน {zone} (Zone {zone})
                           </button>
@@ -848,23 +865,22 @@ export default function HomePage() {
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                         {filteredAdminSlots.map(s => {
                           const isChecked = selectedSlotIds.includes(s.slot_id)
-                          const statusBg = 
+                          const statusBg =
                             s.status === 'AVAILABLE' ? 'text-emerald-600 bg-emerald-50 border-emerald-200' :
-                            s.status === 'OCCUPIED' ? 'text-amber-600 bg-amber-50 border-amber-200' :
-                            'text-slate-500 bg-slate-100 border-slate-300'
+                              s.status === 'OCCUPIED' ? 'text-amber-600 bg-amber-50 border-amber-200' :
+                                'text-slate-500 bg-slate-100 border-slate-300'
 
-                          const statusText = 
+                          const statusText =
                             s.status === 'AVAILABLE' ? 'ว่าง' :
-                            s.status === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
+                              s.status === 'OCCUPIED' ? 'ไม่ว่าง' : 'ไม่พร้อมใช้งาน'
 
                           return (
                             <div
                               key={s.slot_id}
-                              className={`p-3 rounded-xl border flex items-center justify-between transition-all ${
-                                isChecked
+                              className={`p-3 rounded-xl border flex items-center justify-between transition-all ${isChecked
                                   ? 'bg-rose-50/70 border-rose-300 ring-1 ring-rose-200'
                                   : 'bg-white border-slate-200 hover:border-slate-300 shadow-2xs'
-                              }`}
+                                }`}
                             >
                               <div className="flex items-center gap-2.5">
                                 <input
@@ -968,9 +984,9 @@ export default function HomePage() {
             <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center mb-5">
               <span className="text-[11px] font-semibold text-slate-600 block mb-2">สแกน QR Code เพื่อชำระเงิน</span>
               <div className="w-36 h-36 bg-white border border-slate-200 rounded-xl mx-auto flex items-center justify-center overflow-hidden p-2 shadow-2xs">
-                <img 
-                  src="/3Gdbm1.png" 
-                  alt="QR Code สำหรับชำระเงิน" 
+                <img
+                  src="/3Gdbm1.png"
+                  alt="QR Code สำหรับชำระเงิน"
                   className="w-full h-full object-contain"
                   onError={(e) => {
                     e.target.onerror = null;
